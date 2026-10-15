@@ -1,0 +1,4 @@
+# Keep LF in the working tree on every OS so Dockerfiles, shell snippets
+# and the Makefile behave the same on Windows, macOS and Linux.
+* text=auto eol=lf
+*.exe binary

@@ -1,0 +1,64 @@
+# Local development stack. Credentials here are for local use only.
+# Jaeger, Prometheus and Grafana are added in phase 6 (observability).
+name: flashdeal
+
+x-postgres-url: &postgres-url postgres://flashdeal:flashdeal@postgres:5432/flashdeal?sslmode=disable
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: flashdeal
+      POSTGRES_PASSWORD: flashdeal
+      POSTGRES_DB: flashdeal
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flashdeal -d flashdeal"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    environment:
+      HTTP_ADDR: ":8080"
+      LOG_LEVEL: info
+      POSTGRES_URL: *postgres-url
+      REDIS_ADDR: redis:6379
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # Must exceed SHUTDOWN_TIMEOUT so in-flight requests can drain.
+    stop_grace_period: 20s
+
+  # One-off migration runner: `make migrate`. Not started by `make up`.
+  migrate:
+    image: migrate/migrate:v4.18.3
+    profiles: ["tools"]
+    volumes:
+      - ./migrations:/migrations:ro
+    command: ["-path=/migrations", "-database", *postgres-url, "up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

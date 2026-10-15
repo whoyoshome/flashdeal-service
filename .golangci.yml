@@ -1,0 +1,156 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - copyloopvar
+    - depguard
+    - errorlint
+    - forbidigo
+    - gochecknoinits
+    - gocritic
+    - gosec
+    - intrange
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - sloglint
+    - testifylint
+    - unconvert
+    - unparam
+    - usestdlibvars
+
+  settings:
+    # Layer rules from CLAUDE.md ("Architecture rules"). Dependencies point
+    # inward: delivery -> usecase -> domain. Test files are exempt from the
+    # strict allow-lists so they can use testify and testcontainers.
+    depguard:
+      rules:
+        domain:
+          list-mode: strict
+          files: ["**/internal/domain/**", "!$test"]
+          allow:
+            - $gostd
+          deny:
+            - pkg: net/http
+              desc: domain must not know about HTTP
+            - pkg: encoding/json
+              desc: serialization belongs to delivery DTOs
+
+        usecase:
+          list-mode: strict
+          files: ["**/internal/usecase/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/whoyoshome/flashdeal-service/internal/domain
+            - golang.org/x/sync
+          deny:
+            - pkg: net/http
+              desc: use cases must not know about HTTP
+
+        httpapi:
+          list-mode: strict
+          files: ["**/internal/delivery/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/whoyoshome/flashdeal-service/internal/delivery
+            - github.com/whoyoshome/flashdeal-service/internal/usecase
+            - github.com/whoyoshome/flashdeal-service/internal/domain
+            - github.com/whoyoshome/flashdeal-service/internal/platform
+            - github.com/go-chi/chi/v5
+
+        postgres:
+          list-mode: strict
+          files: ["**/internal/repository/postgres/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/whoyoshome/flashdeal-service/internal/domain
+            - github.com/whoyoshome/flashdeal-service/internal/usecase
+            - github.com/whoyoshome/flashdeal-service/internal/platform
+            - github.com/jackc/pgx/v5
+
+        redisrepo:
+          list-mode: strict
+          files: ["**/internal/repository/redisrepo/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/whoyoshome/flashdeal-service/internal/domain
+            - github.com/whoyoshome/flashdeal-service/internal/usecase
+            - github.com/whoyoshome/flashdeal-service/internal/platform
+            - github.com/redis/go-redis/v9
+
+        worker:
+          list-mode: strict
+          files: ["**/internal/worker/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/whoyoshome/flashdeal-service/internal/usecase
+            - github.com/whoyoshome/flashdeal-service/internal/domain
+            - github.com/whoyoshome/flashdeal-service/internal/platform
+
+        platform:
+          list-mode: lax
+          files: ["**/internal/platform/**"]
+          deny:
+            - pkg: github.com/whoyoshome/flashdeal-service/internal/usecase
+              desc: platform is infrastructure and must not depend on use cases
+            - pkg: github.com/whoyoshome/flashdeal-service/internal/delivery
+              desc: platform must not depend on delivery
+            - pkg: github.com/whoyoshome/flashdeal-service/internal/repository
+              desc: platform must not depend on repositories
+            - pkg: github.com/whoyoshome/flashdeal-service/internal/worker
+              desc: platform must not depend on workers
+
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Print(f|ln)?$
+          msg: use the injected *slog.Logger
+        - pattern: ^log\.(Print|Fatal|Panic)(f|ln)?$
+          msg: use the injected *slog.Logger and return errors up to main
+        - pattern: ^os\.(Getenv|LookupEnv)$
+          msg: configuration is loaded once in internal/platform/config
+
+    sloglint:
+      no-global: all
+      context: scope
+      attr-only: true
+      static-msg: true
+      key-naming-case: snake
+
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: context-as-argument
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: indent-error-flow
+        - name: early-return
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: var-naming
+        - name: receiver-naming
+        - name: increment-decrement
+        - name: errorf
+        - name: time-naming
+        - name: unexported-return
+        - name: blank-imports
+        - name: dot-imports
+        - name: range
+        - name: redefines-builtin-id
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/whoyoshome/flashdeal-service
