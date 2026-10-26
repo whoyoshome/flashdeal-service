@@ -3,9 +3,10 @@
 High-concurrency flash-sale API in Go. It sells a limited stock during a short
 window with **zero overselling** under heavy load.
 
-> **Status:** phase 0 (repository bootstrap). The business API arrives in later
-> phases; see the implementation plan in
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (section 7).
+> **Status:** phase 2 (PostgreSQL persistence). The domain model and the
+> repositories are in place; the business API arrives in phase 3. See the
+> implementation plan in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+> (section 7).
 
 ## Requirements
 
@@ -19,12 +20,17 @@ window with **zero overselling** under heavy load.
 
 ```bash
 make up
+make migrate
 curl -i localhost:8080/readyz
 make down
 ```
 
 `make up` builds the API image and starts PostgreSQL and Redis, waiting until
-they are healthy.
+they are healthy. `make migrate` applies the SQL schema in
+[`migrations/`](migrations).
+
+`make test-integration` starts a disposable PostgreSQL with testcontainers, so
+Docker must be running.
 
 ## Endpoints
 

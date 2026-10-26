@@ -37,7 +37,12 @@ var (
 	ErrUserLimitReached      = &Error{Code: CodeUserLimit, Message: "per-user limit reached"}
 	ErrReservationExpired    = &Error{Code: CodeReservationExpired, Message: "reservation expired"}
 	ErrReservationNotPending = &Error{Code: CodeConflict, Message: "reservation is not pending"}
+	ErrReservationNotFound   = &Error{Code: CodeNotFound, Message: "reservation not found"}
+	ErrAlreadyExists         = &Error{Code: CodeConflict, Message: "resource already exists"}
 	ErrStockUnavailable      = &Error{Code: CodeUnavailable, Message: "stock service unavailable"}
+	// ErrIdempotencyKeyReused means a client sent an idempotency key it had
+	// already used for a different request; replaying it would be unsafe.
+	ErrIdempotencyKeyReused = &Error{Code: CodeConflict, Message: "idempotency key already used for a different request"}
 )
 
 // Internal errors: they signal a bug or corrupt data, never a client mistake,
