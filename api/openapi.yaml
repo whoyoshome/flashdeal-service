@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: FlashDeal Service API
-  version: 0.4.0
+  version: 0.5.0
   summary: High-concurrency flash-sale API with zero overselling.
   description: |
     Sells a limited stock of a product during a short window. A user reserves
@@ -136,7 +136,12 @@ paths:
       operationId: activateDeal
       security: []
       summary: Open a deal's stock for reservations (admin)
-      description: Idempotent. Fails with `DEAL_NOT_ACTIVE` once the deal's window has closed.
+      description: |
+        Loads the deal's available units into the stock gate. A deal must be
+        activated before anyone can reserve it. Idempotent: activating again
+        never resets a counter that reservations have already moved. Fails with
+        `DEAL_NOT_ACTIVE` once the deal's window has closed, and with
+        `STOCK_UNAVAILABLE` (503) if the gate is unreachable.
       responses:
         '200':
           description: The activated deal.
@@ -170,6 +175,11 @@ paths:
         cancelled or expires. Retrying with the same `Idempotency-Key` returns
         the original reservation without taking more stock; reusing a key for
         a different request returns 409 `CONFLICT`.
+
+        The deal must be activated first (`DEAL_NOT_ACTIVE` otherwise). The
+        per-user limit is cumulative across all of the caller's reservations
+        on the deal (`USER_LIMIT_REACHED`). If the stock gate is unreachable the
+        service fails closed with 503 `STOCK_UNAVAILABLE` and sells nothing.
       security:
         - userId: []
       parameters:
@@ -439,7 +449,7 @@ components:
         quantity:
           type: integer
           minimum: 1
-          description: Units to hold; at most the deal's per_user_limit.
+          description: Units to hold; together with the caller's other reservations on the deal, at most its per_user_limit.
       example:
         quantity: 1
 

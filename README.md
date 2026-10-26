@@ -3,8 +3,8 @@
 High-concurrency flash-sale API in Go. It sells a limited stock during a short
 window with **zero overselling** under heavy load.
 
-> **Status:** phase 3 (use cases and HTTP API on a PostgreSQL-only baseline).
-> The Redis stock gate arrives in phase 4. See the implementation plan in
+> **Status:** phase 4 (Redis stock gate). Reservations pass an atomic Lua gate
+> in Redis before reaching PostgreSQL. See the implementation plan in
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (section 7).
 
 ## Requirements
@@ -48,18 +48,19 @@ uses the body `{"code", "message", "request_id"}`.
 | `GET`    | `/healthz`                      | Liveness: the process is up (never checks dependencies)        |
 | `GET`    | `/readyz`                       | Readiness: PostgreSQL and Redis are reachable (`200` or `503`) |
 
-### Known limitations (phase 3)
+### Behavior notes and known limitations
 
+- A deal must be **activated** (`POST /v1/deals/{id}/activate`) before it can
+  be reserved: activation loads its stock into the Redis gate.
+- The per-user limit is cumulative across a user's reservations on a deal and
+  holds under parallel requests (enforced atomically in Redis).
+- If Redis is unreachable, reservations fail closed with `503
+  STOCK_UNAVAILABLE`; nothing is sold without the gate.
 - Admin endpoints (`POST /v1/deals`, `/activate`) are not authenticated yet.
 - `X-User-ID` stands in for real authentication; the middleware is the seam
   where JWT validation will go.
-- The per-user limit is enforced per request only; the cumulative limit
-  arrives with the Redis Lua gate in phase 4.
 - Unconfirmed reservations keep their units until the expiry worker lands in
   phase 5.
-- Under contention every reservation serializes on one `deals` row; see the
-  [PostgreSQL-only baseline](test/load/results/baseline-postgres.md). The
-  Redis gate in phase 4 exists to remove this bottleneck.
 
 ## Make targets
 

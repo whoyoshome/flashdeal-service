@@ -78,9 +78,9 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	dealRepo := postgres.NewDealRepo(pool)
 	resRepo := postgres.NewReservationRepo(pool)
 	orderRepo := postgres.NewOrderRepo(pool)
-	// Phase 3 baseline: PostgreSQL alone decides stock. Phase 4 swaps in
-	// the Redis gate here and nowhere else.
-	gate := postgres.NewStockGate()
+	// Redis rejects most requests in memory; only as many as there are units
+	// reach PostgreSQL, whose constraints remain the source of truth.
+	gate := redisrepo.NewStockGate(rdb)
 
 	// Use cases
 	manageDeals := usecase.NewManageDeals(dealRepo, gate, clk)
