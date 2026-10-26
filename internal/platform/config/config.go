@@ -27,6 +27,9 @@ type Config struct {
 	RequestTimeout time.Duration `env:"REQUEST_TIMEOUT" envDefault:"5s"`
 	// ReservationTTL is how long a reservation holds its units.
 	ReservationTTL time.Duration `env:"RESERVATION_TTL" envDefault:"5m"`
+	// IdempotencyTTL is how long a reservation response is replayed for a
+	// retried Idempotency-Key.
+	IdempotencyTTL time.Duration `env:"IDEMPOTENCY_TTL" envDefault:"24h"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
@@ -76,6 +79,7 @@ func (c Config) validate() error {
 		positive("READINESS_TIMEOUT", c.ReadinessTimeout),
 		positive("REQUEST_TIMEOUT", c.RequestTimeout),
 		positive("RESERVATION_TTL", c.ReservationTTL),
+		positive("IDEMPOTENCY_TTL", c.IdempotencyTTL),
 		positive("POSTGRES_CONNECT_TIMEOUT", c.Postgres.ConnectTimeout),
 		positive("POSTGRES_STATEMENT_TIMEOUT", c.Postgres.StatementTimeout),
 		positive("REDIS_DIAL_TIMEOUT", c.Redis.DialTimeout),

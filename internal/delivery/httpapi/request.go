@@ -10,11 +10,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/whoyoshome/flashdeal-service/internal/delivery/httpapi/middleware"
 	"github.com/whoyoshome/flashdeal-service/internal/domain"
 )
-
-// IdempotencyKeyHeader makes reservation requests safe to retry.
-const IdempotencyKeyHeader = "Idempotency-Key"
 
 const (
 	// maxBodyBytes caps request bodies; every request in the API is tiny.
@@ -51,7 +49,7 @@ func dealIDParam(r *http.Request) (int64, error) {
 
 // idempotencyKey reads the required Idempotency-Key header.
 func idempotencyKey(r *http.Request) (string, error) {
-	key := r.Header.Get(IdempotencyKeyHeader)
+	key := r.Header.Get(middleware.IdempotencyKeyHeader)
 	if key == "" || len(key) > maxIdempotencyKeyLen {
 		return "", domain.NewValidation("Idempotency-Key header is required (1-255 characters)")
 	}

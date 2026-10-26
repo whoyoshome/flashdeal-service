@@ -99,6 +99,8 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 			Reserve:        reserve,
 			Confirm:        confirm,
 			Cancel:         cancelReservation,
+			Idempotency:    redisrepo.NewIdempotencyStore(rdb),
+			IdempotencyTTL: cfg.IdempotencyTTL,
 			RequestTimeout: cfg.RequestTimeout,
 			ReadinessChecks: []httpapi.ReadinessCheck{
 				{Name: "postgres", Pinger: pool},

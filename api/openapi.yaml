@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: FlashDeal Service API
-  version: 0.5.0
+  version: 0.6.0
   summary: High-concurrency flash-sale API with zero overselling.
   description: |
     Sells a limited stock of a product during a short window. A user reserves
@@ -172,9 +172,16 @@ paths:
       summary: Reserve units of a deal
       description: |
         Holds units for the caller until the reservation is confirmed,
-        cancelled or expires. Retrying with the same `Idempotency-Key` returns
-        the original reservation without taking more stock; reusing a key for
-        a different request returns 409 `CONFLICT`.
+        cancelled or expires.
+
+        **Idempotency.** Keys are scoped per caller. The first request with a
+        key runs, and its final response (any 2xx or 4xx) is stored for 24 h:
+        retries with the same key and the same request get exactly that
+        response back, marked with `Idempotency-Replayed: true`, without
+        running again. A retry while the first request is still running gets
+        409 `IDEMPOTENCY_IN_PROGRESS` with `Retry-After`. The same key with a
+        different request (other deal or body) gets 409 `CONFLICT`. 5xx
+        responses are not stored, so retrying after one runs the request again.
 
         The deal must be activated first (`DEAL_NOT_ACTIVE` otherwise). The
         per-user limit is cumulative across all of the caller's reservations
@@ -192,10 +199,12 @@ paths:
               $ref: '#/components/schemas/ReserveRequest'
       responses:
         '201':
-          description: Reservation created (or the original one, on a retry).
+          description: Reservation created (or the original response, replayed on a retry).
           headers:
             X-Request-ID:
               $ref: '#/components/headers/X-Request-ID'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
           content:
             application/json:
               schema:
@@ -207,7 +216,22 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/Conflict'
+          description: |
+            The request conflicts with the current state: `SOLD_OUT`,
+            `DEAL_NOT_ACTIVE`, `USER_LIMIT_REACHED`, `CONFLICT` (key reused for
+            a different request) or `IDEMPOTENCY_IN_PROGRESS` (retry after
+            `Retry-After` seconds). Final 409s are replayed on retries.
+          headers:
+            Retry-After:
+              description: Seconds to wait; only on `IDEMPOTENCY_IN_PROGRESS`.
+              schema:
+                type: integer
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -352,6 +376,11 @@ components:
       description: Request identifier, also present in error bodies. Echoes a well-formed incoming value.
       schema:
         type: string
+    Idempotency-Replayed:
+      description: Present and `true` when the response is a stored one replayed for a retried Idempotency-Key.
+      schema:
+        type: string
+        enum: ['true']
 
   schemas:
     CreateDealRequest:
@@ -541,6 +570,7 @@ components:
             - UNAUTHENTICATED
             - METHOD_NOT_ALLOWED
             - REQUEST_TIMEOUT
+            - IDEMPOTENCY_IN_PROGRESS
             - INTERNAL
         message:
           type: string

@@ -56,6 +56,12 @@ type Deps struct {
 	Confirm Confirmer
 	Cancel  Canceller
 
+	// Idempotency stores reservation responses by Idempotency-Key. Nil
+	// disables the middleware (handler tests).
+	Idempotency usecase.IdempotencyStore
+	// IdempotencyTTL is how long a stored response is replayed.
+	IdempotencyTTL time.Duration
+
 	// RequestTimeout bounds every /v1 request.
 	RequestTimeout time.Duration
 	// ReadinessChecks are probed by GET /readyz.
@@ -98,12 +104,26 @@ func NewRouter(d Deps) http.Handler {
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Auth)
-			r.Post("/deals/{id}/reservations", h.reserve)
+			r.With(idempotency(d)...).Post("/deals/{id}/reservations", h.reserve)
 			r.Post("/reservations/{id}/confirm", h.confirm)
 			r.Delete("/reservations/{id}", h.cancel)
 		})
 	})
 	return r
+}
+
+// idemLockMargin keeps a running request's idempotency claim alive past its
+// own timeout, so the claim never expires while the request still runs.
+const idemLockMargin = 5 * time.Second
+
+// idempotency returns the idempotency middleware for resource-creating
+// routes, or none when no store is configured.
+func idempotency(d Deps) []func(http.Handler) http.Handler {
+	if d.Idempotency == nil {
+		return nil
+	}
+	cfg := middleware.IdempotencyConfig{LockTTL: d.RequestTimeout + idemLockMargin, ResponseTTL: d.IdempotencyTTL}
+	return []func(http.Handler) http.Handler{middleware.Idempotency(d.Idempotency, cfg, d.Log)}
 }
 
 type handlers struct {
