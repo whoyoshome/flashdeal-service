@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,7 +13,10 @@ import (
 	"github.com/whoyoshome/flashdeal-service/internal/usecase"
 )
 
-var _ usecase.ReservationRepository = (*ReservationRepo)(nil)
+var (
+	_ usecase.ReservationRepository = (*ReservationRepo)(nil)
+	_ usecase.ExpiryQueue           = (*ReservationRepo)(nil)
+)
 
 const (
 	// ON CONFLICT keeps the transaction usable on a retried idempotency key,
@@ -38,6 +42,22 @@ FOR UPDATE`
 	// guards against a transition decided on a stale read.
 	updateReservationStatus = `UPDATE reservations SET status = $2, updated_at = $3
 WHERE id = $1 AND status = 'pending'`
+
+	// SKIP LOCKED lets workers on every replica take disjoint batches: rows
+	// another transaction holds are passed over instead of waited on. The
+	// cutoff is a parameter, not now(), so the caller's clock decides what
+	// is due, matching domain.Reservation.IsExpired (expires_at <= now).
+	selectDueReservations = `SELECT ` + reservationColumns + ` FROM reservations
+WHERE status = 'pending' AND expires_at <= $1
+ORDER BY expires_at
+LIMIT $2
+FOR UPDATE SKIP LOCKED`
+
+	// One statement for the whole batch; the status and time come from the
+	// domain transitions, and only rows still pending may change.
+	updateReservationStatuses = `UPDATE reservations AS r SET status = u.status, updated_at = u.updated_at
+FROM unnest($1::uuid[], $2::text[], $3::timestamptz[]) AS u(id, status, updated_at)
+WHERE r.id = u.id AND r.status = 'pending'`
 )
 
 // ReservationRepo persists reservations and reserves their stock.
@@ -141,6 +161,61 @@ func (r *ReservationRepo) UpdateStatus(ctx context.Context, res domain.Reservati
 		return fmt.Errorf("update reservation %s: %w", res.ID(), err)
 	}
 	if tag.RowsAffected() == 0 {
+		return domain.ErrReservationNotPending
+	}
+	return nil
+}
+
+// LockDue returns up to limit pending reservations due at now, oldest
+// first, locking them until the surrounding transaction ends. Call it inside
+// TxManager.WithinTx: outside a transaction the locks end with the query.
+func (r *ReservationRepo) LockDue(ctx context.Context, now time.Time, limit int) ([]domain.Reservation, error) {
+	rows, err := db(ctx, r.pool).Query(ctx, selectDueReservations, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query due reservations: %w", err)
+	}
+	defer rows.Close()
+
+	due := make([]domain.Reservation, 0, limit)
+	for rows.Next() {
+		var row reservationRow
+		if err := rows.Scan(row.scanTargets()...); err != nil {
+			return nil, fmt.Errorf("scan reservation: %w", err)
+		}
+		res, err := row.toDomain()
+		if err != nil {
+			return nil, err
+		}
+		due = append(due, res)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate due reservations: %w", err)
+	}
+	return due, nil
+}
+
+// MarkExpired persists the status of every reservation in rs in one
+// statement. If any stored row already left pending, nothing is applied to
+// it and domain.ErrReservationNotPending is returned, so the caller's
+// transaction rolls back as a whole.
+func (r *ReservationRepo) MarkExpired(ctx context.Context, rs []domain.Reservation) error {
+	if len(rs) == 0 {
+		return nil
+	}
+	ids := make([]string, len(rs))
+	statuses := make([]string, len(rs))
+	updated := make([]time.Time, len(rs))
+	for i, res := range rs {
+		ids[i], statuses[i], updated[i] = res.ID(), string(res.Status()), res.UpdatedAt()
+	}
+	tag, err := db(ctx, r.pool).Exec(ctx, updateReservationStatuses, ids, statuses, updated)
+	if err != nil {
+		if de := translate(err); de != nil {
+			return de
+		}
+		return fmt.Errorf("update %d reservations: %w", len(rs), err)
+	}
+	if tag.RowsAffected() != int64(len(rs)) {
 		return domain.ErrReservationNotPending
 	}
 	return nil

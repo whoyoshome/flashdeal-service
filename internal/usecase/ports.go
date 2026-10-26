@@ -133,6 +133,20 @@ type ReservationRepository interface {
 	UpdateStatus(ctx context.Context, r domain.Reservation) error
 }
 
+// ExpiryQueue hands out reservations whose TTL has elapsed so their units
+// can return to the deal.
+type ExpiryQueue interface {
+	// LockDue returns up to limit pending reservations whose TTL elapsed at
+	// now, oldest first, locked until the surrounding transaction ends. Rows
+	// another transaction holds are skipped, so workers on any number of
+	// replicas take disjoint batches without coordinating.
+	LockDue(ctx context.Context, now time.Time, limit int) ([]domain.Reservation, error)
+	// MarkExpired persists the transitions made by Reservation.Expire. It
+	// returns domain.ErrReservationNotPending if any of them is no longer
+	// pending in storage.
+	MarkExpired(ctx context.Context, rs []domain.Reservation) error
+}
+
 // OrderRepository stores orders.
 type OrderRepository interface {
 	// Create persists o; it returns domain.ErrAlreadyExists when the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ var (
 	_ usecase.DealStock             = (*fakeDeals)(nil)
 	_ usecase.ReservationRepository = (*fakeReservations)(nil)
 	_ usecase.OrderRepository       = (*fakeOrders)(nil)
+	_ usecase.ExpiryQueue           = (*fakeQueue)(nil)
 	_ usecase.TxManager             = (*fakeTx)(nil)
 )
 
@@ -229,6 +231,41 @@ func (f *fakeOrders) Create(_ context.Context, o domain.Order) error {
 		return f.err
 	}
 	f.created = append(f.created, o)
+	return nil
+}
+
+// fakeQueue holds reservations in memory and hands out the pending ones due
+// at the requested time, oldest first, like the SQL queue does.
+type fakeQueue struct {
+	pending   []domain.Reservation
+	lockErr   error
+	markErr   error
+	lockCalls []listCall
+	marked    []domain.Reservation
+}
+
+func (f *fakeQueue) LockDue(_ context.Context, now time.Time, limit int) ([]domain.Reservation, error) {
+	f.lockCalls = append(f.lockCalls, listCall{now: now, limit: limit})
+	if f.lockErr != nil {
+		return nil, f.lockErr
+	}
+	var due []domain.Reservation
+	for _, r := range f.pending {
+		if len(due) < limit && r.IsExpired(now) {
+			due = append(due, r)
+		}
+	}
+	return due, nil
+}
+
+func (f *fakeQueue) MarkExpired(_ context.Context, rs []domain.Reservation) error {
+	if f.markErr != nil {
+		return f.markErr
+	}
+	f.marked = append(f.marked, rs...)
+	f.pending = slices.DeleteFunc(f.pending, func(p domain.Reservation) bool {
+		return slices.ContainsFunc(rs, func(r domain.Reservation) bool { return r.ID() == p.ID() })
+	})
 	return nil
 }
 
