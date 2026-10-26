@@ -93,6 +93,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	confirm := usecase.NewConfirm(dealRepo, dealRepo, resRepo, orderRepo, txm, clk, ids)
 	cancelReservation := usecase.NewCancel(dealRepo, resRepo, gate, txm, clk, log)
 	expire := usecase.NewExpire(resRepo, dealRepo, gate, txm, clk, cfg.ExpireBatchSize, log)
+	reconcile := usecase.NewReconcile(dealRepo, dealRepo, gate, clk)
 
 	// Delivery
 	srv := &http.Server{
@@ -131,6 +132,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 		return nil
 	})
 	g.Go(func() error { return worker.NewExpirer(expire, cfg.ExpireEvery, log).Run(gctx) })
+	g.Go(func() error { return worker.NewReconciler(reconcile, cfg.ReconcileEvery, log).Run(gctx) })
 	g.Go(func() error {
 		<-gctx.Done()
 		log.InfoContext(gctx, "shutting down", slog.String("timeout", cfg.ShutdownTimeout.String()))

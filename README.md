@@ -98,6 +98,13 @@ on `SIGTERM`. Every replica runs them; they need no leader election.
   past their TTL as `expired` and returns their units to the deal and to
   the Redis gate. Batches of `EXPIRE_BATCH_SIZE` rows are claimed with
   `FOR UPDATE SKIP LOCKED`, so replicas never process the same row.
+- **Reconciler** (`RECONCILE_EVERY`, default 30s): compares the Redis gate
+  of every active deal with PostgreSQL and, when a release was lost,
+  restores the stock and the per-buyer holdings from PostgreSQL. It only
+  repairs a disagreement that stood still for two consecutive passes, with
+  a compare-and-set, so it never fights an operation in flight. Repairs are
+  logged as `stock gate drift repaired`. See
+  [ADR 0005](docs/adr/0005-stock-gate-reconciliation.md).
 
 ## Project layout and rules
 

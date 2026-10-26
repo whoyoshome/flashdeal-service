@@ -32,6 +32,7 @@ func TestLoad(t *testing.T) {
 		require.Equal(t, 2*time.Second, cfg.DealCacheTTL)
 		require.Equal(t, 5*time.Second, cfg.ExpireEvery)
 		require.Equal(t, 100, cfg.ExpireBatchSize)
+		require.Equal(t, 30*time.Second, cfg.ReconcileEvery)
 		require.Equal(t, testPostgresURL, cfg.Postgres.URL)
 		require.EqualValues(t, 20, cfg.Postgres.MaxConns)
 		require.EqualValues(t, 2, cfg.Postgres.MinConns)
@@ -118,6 +119,11 @@ func TestLoadValidation(t *testing.T) {
 		{name: "rejects a non-positive deal cache TTL", env: []string{"DEAL_CACHE_TTL=0s"}},
 		{name: "rejects a non-positive expiry interval", env: []string{"EXPIRE_EVERY=0s"}},
 		{name: "rejects a non-positive expiry batch size", env: []string{"EXPIRE_BATCH_SIZE=0"}},
+		{name: "rejects a non-positive reconciliation interval", env: []string{"RECONCILE_EVERY=0s"}},
+		{
+			name: "rejects a reconciliation interval an in-flight reservation could outlast",
+			env:  []string{"REQUEST_TIMEOUT=5s", "RECONCILE_EVERY=10s"},
+		},
 		{name: "rejects a non-positive statement timeout", env: []string{"POSTGRES_STATEMENT_TIMEOUT=0s"}},
 		{name: "rejects zero max connections", env: []string{"POSTGRES_MAX_CONNS=0"}},
 		{name: "rejects min connections above max connections", env: []string{"POSTGRES_MAX_CONNS=5", "POSTGRES_MIN_CONNS=6"}},

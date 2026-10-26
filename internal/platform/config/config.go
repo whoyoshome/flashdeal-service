@@ -11,6 +11,10 @@ import (
 	"github.com/caarlos0/env/v11"
 )
 
+// reconcileMargin is how much longer than a request a reconciliation pass
+// must take; see Config.ReconcileEvery.
+const reconcileMargin = 5 * time.Second
+
 // ErrInvalid is returned when the configuration parses but breaks a rule
 // the service needs to run safely (for example, a non-positive timeout).
 var ErrInvalid = errors.New("invalid config")
@@ -40,6 +44,11 @@ type Config struct {
 	// ExpireBatchSize bounds how many reservations one expiry transaction
 	// locks, keeping row locks on the deals short.
 	ExpireBatchSize int `env:"EXPIRE_BATCH_SIZE" envDefault:"100"`
+	// ReconcileEvery is how often each replica compares the Redis gate with
+	// PostgreSQL. A drift is repaired only after it stood still for a whole
+	// interval, which proves nothing was in flight only if the interval
+	// outlasts the longest operation: see validate.
+	ReconcileEvery time.Duration `env:"RECONCILE_EVERY" envDefault:"30s"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
@@ -92,6 +101,7 @@ func (c Config) validate() error {
 		positive("IDEMPOTENCY_TTL", c.IdempotencyTTL),
 		positive("DEAL_CACHE_TTL", c.DealCacheTTL),
 		positive("EXPIRE_EVERY", c.ExpireEvery),
+		positive("RECONCILE_EVERY", c.ReconcileEvery),
 		positive("POSTGRES_CONNECT_TIMEOUT", c.Postgres.ConnectTimeout),
 		positive("POSTGRES_STATEMENT_TIMEOUT", c.Postgres.StatementTimeout),
 		positive("REDIS_DIAL_TIMEOUT", c.Redis.DialTimeout),
@@ -106,6 +116,12 @@ func (c Config) validate() error {
 	}
 	if c.ExpireBatchSize <= 0 {
 		errs = append(errs, errors.New("EXPIRE_BATCH_SIZE must be positive"))
+	}
+	// The longest operation that can leave Redis and PostgreSQL disagreeing is
+	// a reservation: REQUEST_TIMEOUT, then a detached COMMIT (2s) and a gate
+	// compensation (2s). The extra second is margin.
+	if c.ReconcileEvery <= c.RequestTimeout+reconcileMargin {
+		errs = append(errs, fmt.Errorf("RECONCILE_EVERY must exceed REQUEST_TIMEOUT by more than %s", reconcileMargin))
 	}
 	if c.Redis.PoolSize <= 0 {
 		errs = append(errs, errors.New("REDIS_POOL_SIZE must be positive"))
