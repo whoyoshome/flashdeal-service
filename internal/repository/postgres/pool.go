@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whoyoshome/flashdeal-service/internal/platform/config"
@@ -13,7 +14,8 @@ import (
 
 // NewPool creates a bounded pgx pool and verifies the database is reachable,
 // so a misconfigured instance fails at startup instead of on the first request.
-func NewPool(ctx context.Context, cfg config.Postgres) (*pgxpool.Pool, error) {
+// tracer, when not nil, observes every query (see platform/observability).
+func NewPool(ctx context.Context, cfg config.Postgres, tracer pgx.QueryTracer) (*pgxpool.Pool, error) {
 	pcfg, err := pgxpool.ParseConfig(cfg.URL)
 	if err != nil {
 		// pgx redacts the password from parse errors.
@@ -25,6 +27,7 @@ func NewPool(ctx context.Context, cfg config.Postgres) (*pgxpool.Pool, error) {
 	// A server-side statement timeout bounds every query even if a caller
 	// forgets a context deadline.
 	pcfg.ConnConfig.RuntimeParams["statement_timeout"] = strconv.FormatInt(cfg.StatementTimeout.Milliseconds(), 10)
+	pcfg.ConnConfig.Tracer = tracer
 
 	pool, err := pgxpool.NewWithConfig(ctx, pcfg)
 	if err != nil {

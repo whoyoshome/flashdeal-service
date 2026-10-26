@@ -167,3 +167,26 @@ func TestReadinessProbesDependenciesConcurrently(t *testing.T) {
 		require.Equal(t, map[string]string{"postgres": "ok", "redis": "ok"}, body.Checks)
 	})
 }
+
+func TestTracingMiddleware(t *testing.T) {
+	t.Parallel()
+
+	var traced []string
+	h := httpapi.NewRouter(httpapi.Deps{
+		Log:            slog.New(slog.DiscardHandler),
+		Queries:        &fakeDealFinder{deal: sampleDeal(t)},
+		RequestTimeout: time.Second,
+		Tracing: func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				traced = append(traced, r.URL.Path)
+				next.ServeHTTP(w, r)
+			})
+		},
+	})
+
+	for _, path := range []string{"/v1/deals/7", "/healthz"} {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
+	}
+
+	require.Equal(t, []string{"/v1/deals/7"}, traced, "business routes are traced; probes are not")
+}

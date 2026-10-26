@@ -36,6 +36,8 @@ const (
 	idleTimeout       = 60 * time.Second
 	// adminWriteTimeout leaves room for a CPU profile, 30s by default.
 	adminWriteTimeout = 65 * time.Second
+	// tracingFlushTimeout bounds exporting the last buffered spans at exit.
+	tracingFlushTimeout = 5 * time.Second
 )
 
 func main() {
@@ -58,12 +60,29 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	}
 	log := logger.New(stdout, cfg.LogLevel)
 
+	// Telemetry. Tracing is set up first and shut down last, so spans from
+	// the final requests and worker passes are still flushed.
+	tracing, err := observability.NewTracing(ctx, cfg.Tracing)
+	if err != nil {
+		return fmt.Errorf("tracing: %w", err)
+	}
+	observability.ReportErrorsTo(log)
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), tracingFlushTimeout)
+		defer cancel()
+		if err := tracing.Shutdown(flushCtx); err != nil {
+			log.WarnContext(ctx, "flush traces", slog.Any("error", err))
+		}
+	}()
+	metrics := observability.NewMetrics()
+
 	// Infrastructure
-	pool, err := postgres.NewPool(ctx, cfg.Postgres)
+	pool, err := postgres.NewPool(ctx, cfg.Postgres, tracing.PgxTracer())
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)
 	}
 	defer pool.Close()
+	metrics.WatchPool(func() observability.PoolStats { return pool.Stat() })
 
 	rdb, err := redisrepo.NewClient(ctx, cfg.Redis)
 	if err != nil {
@@ -74,6 +93,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 			log.WarnContext(ctx, "close redis client", slog.Any("error", err))
 		}
 	}()
+	rdb.AddHook(tracing.RedisHook())
 
 	// Adapters
 	clk := clock.System{}
@@ -99,10 +119,6 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	reconcile := usecase.NewReconcile(dealRepo, dealRepo, gate, clk)
 	stockLevels := usecase.NewStockLevels(dealRepo, gate, clk)
 
-	// Telemetry
-	metrics := observability.NewMetrics()
-	metrics.WatchPool(func() observability.PoolStats { return pool.Stat() })
-
 	// Delivery
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
@@ -118,6 +134,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 			RequestTimeout: cfg.RequestTimeout,
 			Metrics:        metrics,
 			MetricsHandler: metrics.Handler(),
+			Tracing:        tracing.HTTPMiddleware,
 			ReadinessChecks: []httpapi.ReadinessCheck{
 				{Name: "postgres", Pinger: pool},
 				{Name: "redis", Pinger: redisrepo.NewPinger(rdb)},
@@ -147,9 +164,13 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return listen(gctx, log, "http", srv) })
 	g.Go(func() error { return listen(gctx, log, "admin", admin) })
-	g.Go(func() error { return worker.NewExpirer(expire, cfg.ExpireEvery, metrics, log).Run(gctx) })
-	g.Go(func() error { return worker.NewReconciler(reconcile, cfg.ReconcileEvery, metrics, log).Run(gctx) })
-	g.Go(func() error { return worker.NewStockSampler(stockLevels, metrics, cfg.StockSampleEvery, log).Run(gctx) })
+	g.Go(func() error { return worker.NewExpirer(expire, cfg.ExpireEvery, metrics, tracing, log).Run(gctx) })
+	g.Go(func() error {
+		return worker.NewReconciler(reconcile, cfg.ReconcileEvery, metrics, tracing, log).Run(gctx)
+	})
+	g.Go(func() error {
+		return worker.NewStockSampler(stockLevels, metrics, cfg.StockSampleEvery, tracing, log).Run(gctx)
+	})
 	g.Go(func() error {
 		<-gctx.Done()
 		log.InfoContext(gctx, "shutting down", slog.String("timeout", cfg.ShutdownTimeout.String()))

@@ -28,22 +28,25 @@ type Reconciler struct {
 	reconcile ReconcileRunner
 	interval  time.Duration
 	metrics   RepairMetrics
+	tracer    Tracer
 	log       *slog.Logger
 }
 
 // NewReconciler returns a Reconciler that runs reconcile every interval.
-func NewReconciler(reconcile ReconcileRunner, interval time.Duration, metrics RepairMetrics, log *slog.Logger) *Reconciler {
-	return &Reconciler{reconcile: reconcile, interval: interval, metrics: metrics, log: log}
+func NewReconciler(
+	reconcile ReconcileRunner, interval time.Duration, metrics RepairMetrics, tracer Tracer, log *slog.Logger,
+) *Reconciler {
+	return &Reconciler{reconcile: reconcile, interval: interval, metrics: metrics, tracer: tracer, log: log}
 }
 
 // Run blocks until ctx is cancelled. A failed pass is logged and retried on
 // the next tick.
 func (r *Reconciler) Run(ctx context.Context) error {
 	r.log.InfoContext(ctx, "stock reconciler started", slog.String("interval", r.interval.String()))
-	return runEvery(ctx, r.interval, r.tick)
+	return runEvery(ctx, r.interval, r.tracer, "worker.reconcile", r.tick)
 }
 
-func (r *Reconciler) tick(ctx context.Context) {
+func (r *Reconciler) tick(ctx context.Context) error {
 	res, err := r.reconcile.Execute(ctx)
 	if len(res.Repaired) > 0 {
 		r.metrics.StockGateRepaired(len(res.Repaired))
@@ -57,4 +60,5 @@ func (r *Reconciler) tick(ctx context.Context) {
 	if err != nil && ctx.Err() == nil {
 		r.log.ErrorContext(ctx, "reconcile stock gate", slog.Any("error", err))
 	}
+	return err
 }

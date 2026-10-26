@@ -26,27 +26,29 @@ type StockSampler struct {
 	levels   StockReader
 	gauge    StockGauge
 	interval time.Duration
+	tracer   Tracer
 	log      *slog.Logger
 }
 
 // NewStockSampler returns a StockSampler that samples every interval.
-func NewStockSampler(levels StockReader, gauge StockGauge, interval time.Duration, log *slog.Logger) *StockSampler {
-	return &StockSampler{levels: levels, gauge: gauge, interval: interval, log: log}
+func NewStockSampler(levels StockReader, gauge StockGauge, interval time.Duration, tracer Tracer, log *slog.Logger) *StockSampler {
+	return &StockSampler{levels: levels, gauge: gauge, interval: interval, tracer: tracer, log: log}
 }
 
 // Run blocks until ctx is cancelled. A failed sample keeps the previous
 // values and is logged; the next tick tries again.
 func (s *StockSampler) Run(ctx context.Context) error {
-	return runEvery(ctx, s.interval, s.tick)
+	return runEvery(ctx, s.interval, s.tracer, "worker.sample_stock", s.tick)
 }
 
-func (s *StockSampler) tick(ctx context.Context) {
+func (s *StockSampler) tick(ctx context.Context) error {
 	levels, err := s.levels.Execute(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			s.log.WarnContext(ctx, "sample stock levels", slog.Any("error", err))
 		}
-		return
+		return err
 	}
 	s.gauge.SetStockLevels(levels)
+	return nil
 }

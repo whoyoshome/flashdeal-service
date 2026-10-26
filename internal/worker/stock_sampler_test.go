@@ -24,11 +24,11 @@ func (f *fakeStock) Execute(context.Context) (map[int64]int, error) {
 	return f.run(f.calls.Add(1))
 }
 
-func startSampler(ctx context.Context, levels *fakeStock, gauge *fakeMetrics, logs *bytes.Buffer) (stop func() error) {
+func startSampler(ctx context.Context, levels *fakeStock, gauge *fakeMetrics, tracer *fakeTracer, logs *bytes.Buffer) (stop func() error) {
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() {
-		done <- worker.NewStockSampler(levels, gauge, interval, slog.New(slog.NewTextHandler(logs, nil))).Run(ctx)
+		done <- worker.NewStockSampler(levels, gauge, interval, tracer, slog.New(slog.NewTextHandler(logs, nil))).Run(ctx)
 	}()
 	return func() error {
 		cancel()
@@ -47,7 +47,8 @@ func TestStockSampler(t *testing.T) {
 				return map[int64]int{7: 10 - int(call)}, nil
 			}}
 			gauge := &fakeMetrics{}
-			stop := startSampler(t.Context(), levels, gauge, &bytes.Buffer{})
+			tracer := &fakeTracer{}
+			stop := startSampler(t.Context(), levels, gauge, tracer, &bytes.Buffer{})
 
 			time.Sleep(3 * interval)
 			synctest.Wait()
@@ -56,6 +57,8 @@ func TestStockSampler(t *testing.T) {
 			published, sets := gauge.published()
 			require.Equal(t, 3, sets)
 			require.Equal(t, map[int64]int{7: 7}, published)
+			spans, _ := tracer.ended()
+			require.Equal(t, []string{"worker.sample_stock", "worker.sample_stock", "worker.sample_stock"}, spans)
 		})
 	})
 
@@ -70,7 +73,7 @@ func TestStockSampler(t *testing.T) {
 			}}
 			gauge := &fakeMetrics{}
 			var logs bytes.Buffer
-			stop := startSampler(t.Context(), levels, gauge, &logs)
+			stop := startSampler(t.Context(), levels, gauge, &fakeTracer{}, &logs)
 
 			time.Sleep(2 * interval)
 			synctest.Wait()

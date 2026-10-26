@@ -29,11 +29,11 @@ func (f *fakeReconcile) Execute(ctx context.Context) (usecase.ReconcileResult, e
 	return f.run(ctx, call)
 }
 
-func startReconciler(ctx context.Context, runner *fakeReconcile, metrics *fakeMetrics, logs *bytes.Buffer) (stop func() error) {
+func startReconciler(ctx context.Context, runner *fakeReconcile, metrics *fakeMetrics, tracer *fakeTracer, logs *bytes.Buffer) (stop func() error) {
 	ctx, cancel := context.WithCancel(ctx)
 	log := slog.New(slog.NewTextHandler(logs, nil))
 	done := make(chan error, 1)
-	go func() { done <- worker.NewReconciler(runner, interval, metrics, log).Run(ctx) }()
+	go func() { done <- worker.NewReconciler(runner, interval, metrics, tracer, log).Run(ctx) }()
 	return func() error {
 		cancel()
 		return <-done
@@ -48,13 +48,16 @@ func TestReconciler(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
 			runner := &fakeReconcile{}
-			stop := startReconciler(t.Context(), runner, &fakeMetrics{}, &bytes.Buffer{})
+			tracer := &fakeTracer{}
+			stop := startReconciler(t.Context(), runner, &fakeMetrics{}, tracer, &bytes.Buffer{})
 
 			time.Sleep(2*interval + time.Second)
 			synctest.Wait()
 			require.EqualValues(t, 2, runner.calls.Load())
 
 			require.NoError(t, stop())
+			spans, _ := tracer.ended()
+			require.Equal(t, []string{"worker.reconcile", "worker.reconcile"}, spans)
 		})
 	})
 
@@ -66,7 +69,7 @@ func TestReconciler(t *testing.T) {
 			}}
 			metrics := &fakeMetrics{}
 			var logs bytes.Buffer
-			stop := startReconciler(t.Context(), runner, metrics, &logs)
+			stop := startReconciler(t.Context(), runner, metrics, &fakeTracer{}, &logs)
 
 			time.Sleep(interval)
 			synctest.Wait()
@@ -87,7 +90,7 @@ func TestReconciler(t *testing.T) {
 				return usecase.ReconcileResult{}, nil
 			}}
 			var logs bytes.Buffer
-			stop := startReconciler(t.Context(), runner, &fakeMetrics{}, &logs)
+			stop := startReconciler(t.Context(), runner, &fakeMetrics{}, &fakeTracer{}, &logs)
 
 			time.Sleep(2 * interval)
 			synctest.Wait()
@@ -108,7 +111,7 @@ func TestReconciler(t *testing.T) {
 				return usecase.ReconcileResult{}, ctx.Err()
 			}}
 			var logs bytes.Buffer
-			stop := startReconciler(ctx, runner, &fakeMetrics{}, &logs)
+			stop := startReconciler(ctx, runner, &fakeMetrics{}, &fakeTracer{}, &logs)
 
 			time.Sleep(interval)
 			synctest.Wait()

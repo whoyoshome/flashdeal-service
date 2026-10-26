@@ -76,6 +76,8 @@ type Deps struct {
 	Metrics Metrics
 	// MetricsHandler serves GET /metrics; nil leaves the route out.
 	MetricsHandler http.Handler
+	// Tracing starts a span per /v1 request; nil disables it.
+	Tracing func(http.Handler) http.Handler
 
 	// ReadinessChecks are probed by GET /readyz.
 	ReadinessChecks []ReadinessCheck
@@ -115,6 +117,11 @@ func NewRouter(d Deps) http.Handler {
 	}
 
 	r.Route("/v1", func(r chi.Router) {
+		// Tracing comes first so the access log and everything below run
+		// inside the request's span and carry its trace_id.
+		if d.Tracing != nil {
+			r.Use(d.Tracing)
+		}
 		r.Use(middleware.Logging(d.Log), middleware.Metrics(metrics), middleware.Timeout(d.RequestTimeout))
 
 		// Admin endpoints are not authenticated yet (pending, see README).

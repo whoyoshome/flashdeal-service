@@ -1,7 +1,9 @@
 package worker_test
 
 import (
+	"context"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -31,4 +33,28 @@ func (m *fakeMetrics) published() (map[int64]int, int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.levels, m.sets
+}
+
+// fakeTracer records the spans the workers start and how they end.
+type fakeTracer struct {
+	mu    sync.Mutex
+	spans []string
+	errs  []error
+}
+
+func (f *fakeTracer) StartSpan(ctx context.Context, name string) (context.Context, func(error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.spans = append(f.spans, name)
+	return ctx, func(err error) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.errs = append(f.errs, err)
+	}
+}
+
+func (f *fakeTracer) ended() ([]string, []error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.spans), slices.Clone(f.errs)
 }

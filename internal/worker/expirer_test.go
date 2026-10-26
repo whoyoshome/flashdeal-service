@@ -36,11 +36,11 @@ func (f *fakeRunner) Execute(ctx context.Context) (int, error) {
 
 // startExpirer runs an Expirer until stop is called, which cancels it and
 // returns what Run returned.
-func startExpirer(ctx context.Context, runner *fakeRunner, metrics *fakeMetrics, logs *bytes.Buffer) (stop func() error) {
+func startExpirer(ctx context.Context, runner *fakeRunner, metrics *fakeMetrics, tracer *fakeTracer, logs *bytes.Buffer) (stop func() error) {
 	ctx, cancel := context.WithCancel(ctx)
 	log := slog.New(slog.NewTextHandler(logs, nil))
 	done := make(chan error, 1)
-	go func() { done <- worker.NewExpirer(runner, interval, metrics, log).Run(ctx) }()
+	go func() { done <- worker.NewExpirer(runner, interval, metrics, tracer, log).Run(ctx) }()
 	return func() error {
 		cancel()
 		return <-done
@@ -54,7 +54,7 @@ func TestExpirer(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
 			runner := &fakeRunner{}
-			stop := startExpirer(t.Context(), runner, &fakeMetrics{}, &bytes.Buffer{})
+			stop := startExpirer(t.Context(), runner, &fakeMetrics{}, &fakeTracer{}, &bytes.Buffer{})
 
 			time.Sleep(3*interval + time.Second)
 			synctest.Wait()
@@ -71,7 +71,7 @@ func TestExpirer(t *testing.T) {
 			runner := &fakeRunner{run: func(context.Context, int64) (int, error) { return 4, nil }}
 			metrics := &fakeMetrics{}
 			var logs bytes.Buffer
-			stop := startExpirer(t.Context(), runner, metrics, &logs)
+			stop := startExpirer(t.Context(), runner, metrics, &fakeTracer{}, &logs)
 
 			time.Sleep(interval)
 			synctest.Wait()
@@ -92,11 +92,17 @@ func TestExpirer(t *testing.T) {
 				return 0, nil
 			}}
 			var logs bytes.Buffer
-			stop := startExpirer(t.Context(), runner, &fakeMetrics{}, &logs)
+			tracer := &fakeTracer{}
+			stop := startExpirer(t.Context(), runner, &fakeMetrics{}, tracer, &logs)
 
 			time.Sleep(2 * interval)
 			synctest.Wait()
 			require.NoError(t, stop(), "a failed run must not stop the worker or the service")
+
+			spans, errs := tracer.ended()
+			require.Equal(t, []string{"worker.expire", "worker.expire"}, spans, "each run gets its own span")
+			require.Error(t, errs[0], "the failed run marks its span")
+			require.NoError(t, errs[1])
 
 			require.EqualValues(t, 2, runner.calls.Load())
 			require.Contains(t, logs.String(), `level=ERROR msg="expire reservations" error="connection reset"`)
@@ -112,7 +118,7 @@ func TestExpirer(t *testing.T) {
 				return 0, ctx.Err()
 			}}
 			var logs bytes.Buffer
-			stop := startExpirer(ctx, runner, &fakeMetrics{}, &logs)
+			stop := startExpirer(ctx, runner, &fakeMetrics{}, &fakeTracer{}, &logs)
 
 			time.Sleep(interval)
 			synctest.Wait()

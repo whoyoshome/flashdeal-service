@@ -67,7 +67,7 @@ func runIntegration(m *testing.M) (int, error) {
 		MinConns:         1,
 		ConnectTimeout:   5 * time.Second,
 		StatementTimeout: 5 * time.Second,
-	})
+	}, nil)
 	if err != nil {
 		return 0, fmt.Errorf("open pool: %w", err)
 	}

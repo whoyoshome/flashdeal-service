@@ -131,6 +131,25 @@ Profiling (`net/http/pprof`) is served on a separate admin listener,
 go tool pprof "http://localhost:6060/debug/pprof/profile?seconds=10"
 ```
 
+### Tracing
+
+With `TRACING_OTLP_ENDPOINT` set (an OTLP/HTTP collector such as Jaeger,
+for example `http://jaeger:4318`), the service exports OpenTelemetry traces:
+
+- one server span per `/v1` request, named after its route
+  (`POST /v1/deals/{id}/reservations`), continuing the caller's trace when
+  the request carries a W3C `traceparent` header;
+- one client span per PostgreSQL query (`db.query.text` holds the
+  parameterized SQL; values are never recorded) and per Redis command or
+  pipeline;
+- one span per worker pass (`worker.expire`, `worker.reconcile`,
+  `worker.sample_stock`).
+
+`TRACING_SAMPLE_RATIO` (default `1`) is the share of new traces kept.
+Requests inside a sampled trace are always kept. Log lines written during a
+traced request carry its `trace_id` and `span_id`. With no endpoint, tracing
+is off and costs nothing.
+
 ## Project layout and rules
 
 - Design and rationale: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (Spanish)
