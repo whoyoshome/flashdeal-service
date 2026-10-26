@@ -7,8 +7,10 @@ trying to reserve one unit.
 It answers two questions:
 
 1. **Correctness**: is any unit oversold? The run fails if more reservations
-   succeed than the deal has stock, or if any response is neither `201` nor
-   `409 SOLD_OUT`. Teardown reads the deal back and checks that the stock is
+   succeed than the deal has stock, or if any response is something other than
+   `201`, `409 SOLD_OUT` or `503 REQUEST_TIMEOUT`. Timeouts are reported as
+   `reservations_timed_out`; they mean degraded availability, not
+   overselling. Teardown reads the deal back and checks that the stock is
    fully reserved and never negative.
 2. **Latency**: how long do successful reservations and sold-out rejections
    take? They are recorded as separate trends (`reserve_ok_duration`,

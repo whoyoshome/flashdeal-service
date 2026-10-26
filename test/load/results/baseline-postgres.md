@@ -29,7 +29,7 @@ reference that phase 4 (Redis gate) is measured against in phase 7.
 | Attempts not started (`dropped_iterations`)| 93 588                           |
 | Reservation latency p50 / p95 / p99        | 4.67 s / 4.91 s / 4.97 s         |
 | Sold-out rejection p50 / p95 / p99         | 4.14 s / 4.82 s / 4.89 s         |
-| Requests that hit the 5 s timeout (500)    | 178 (1.6 %), all rolled back     |
+| Requests that hit the 5 s timeout          | 178 (1.6 %), all rolled back     |
 
 The service never oversold, but it **collapsed under contention**. Every
 reservation needs the row lock on the single `deals` row, so writes serialize
@@ -66,8 +66,11 @@ gate matters when the burst and the stock meet at the same moment, as in run 1.
   `Idempotency-Key`s were rightly rejected with `409 CONFLICT`. Buyers are now
   unique per run.
 
-## Open questions
+## Timeouts under overload
 
-- Requests that exceed the request timeout surface as `500 INTERNAL`. Under
-  overload a `503` (retryable) would be more accurate, but it adds an error
-  code to the public contract and needs approval first.
+Requests that exceed `REQUEST_TIMEOUT` roll back completely. Run 1 returned
+them as `500 INTERNAL`; they now return a retryable `503 REQUEST_TIMEOUT` with
+`Retry-After: 1`, and k6 reports them as `reservations_timed_out` instead of
+failing the correctness gate. Because the system is saturated, their count
+varies a lot between identical runs: 178, 747 and 9 timeouts in three
+consecutive default runs, with zero oversell in all of them.

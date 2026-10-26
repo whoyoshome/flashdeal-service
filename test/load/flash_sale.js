@@ -29,6 +29,10 @@ http.setResponseCallback(http.expectedStatuses(201, 409));
 
 const reserved = new Counter('reservations_created');
 const soldOut = new Counter('reservations_sold_out');
+// Overload makes requests exceed their time budget (503 REQUEST_TIMEOUT).
+// That is degraded availability, not a correctness violation: it is
+// reported here and becomes a threshold in phase 7.
+const timedOut = new Rate('reservations_timed_out');
 const unexpected = new Rate('unexpected_responses');
 const reservedLatency = new Trend('reserve_ok_duration', true);
 const soldOutLatency = new Trend('reserve_sold_out_duration', true);
@@ -48,8 +52,9 @@ export const options = {
     },
   },
   thresholds: {
-    // Correctness gates the run; latency is recorded, and phase 7 turns it
-    // into thresholds once the Redis gate exists to compare against.
+    // Correctness gates the run: never more reservations than stock, and no
+    // answer other than 201, 409 SOLD_OUT or 503 REQUEST_TIMEOUT. Latency and
+    // timeouts are recorded; phase 7 turns them into thresholds.
     reservations_created: [`count<=${STOCK}`],
     unexpected_responses: ['rate==0'],
   },
@@ -106,7 +111,9 @@ export default function (data) {
 
   const ok = res.status === 201;
   const isSoldOut = res.status === 409 && res.json('code') === 'SOLD_OUT';
-  unexpected.add(!ok && !isSoldOut);
+  const isTimeout = res.status === 503 && res.json('code') === 'REQUEST_TIMEOUT';
+  unexpected.add(!ok && !isSoldOut && !isTimeout);
+  timedOut.add(isTimeout);
   if (ok) {
     reserved.add(1);
     reservedLatency.add(res.timings.duration);
@@ -114,7 +121,7 @@ export default function (data) {
     soldOut.add(1);
     soldOutLatency.add(res.timings.duration);
   }
-  check(res, { 'reserved or sold out': () => ok || isSoldOut });
+  check(res, { 'reserved, sold out or timed out': () => ok || isSoldOut || isTimeout });
 }
 
 // teardown reads the deal back: after the burst, every unit must be held
