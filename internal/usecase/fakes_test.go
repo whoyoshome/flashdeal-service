@@ -1,0 +1,278 @@
+package usecase_test
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/whoyoshome/flashdeal-service/internal/domain"
+	"github.com/whoyoshome/flashdeal-service/internal/usecase"
+)
+
+// Hand-written in-memory fakes of the ports. Each records the calls the
+// tests assert on and can be told to fail.
+
+var (
+	_ usecase.Clock                 = (*fakeClock)(nil)
+	_ usecase.IDGenerator           = (*fakeIDs)(nil)
+	_ usecase.StockGate             = (*fakeGate)(nil)
+	_ usecase.DealRepository        = (*fakeDeals)(nil)
+	_ usecase.DealStock             = (*fakeDeals)(nil)
+	_ usecase.ReservationRepository = (*fakeReservations)(nil)
+	_ usecase.OrderRepository       = (*fakeOrders)(nil)
+	_ usecase.TxManager             = (*fakeTx)(nil)
+)
+
+// t0 is the fixed "now" of every test.
+var t0 = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+
+var discardLog = slog.New(slog.DiscardHandler)
+
+type fakeClock struct{ now time.Time }
+
+func (c *fakeClock) Now() time.Time { return c.now }
+
+type fakeIDs struct {
+	n   int
+	err error
+}
+
+func (g *fakeIDs) New() (string, error) {
+	if g.err != nil {
+		return "", g.err
+	}
+	g.n++
+	return fmt.Sprintf("00000000-0000-7000-8000-%012d", g.n), nil
+}
+
+type gateCall struct {
+	dealID int64
+	userID string
+	qty    int
+	limit  int
+	// ctxErr is the context's error when the call happened; compensation
+	// must run with a live context even if the request was cancelled.
+	ctxErr error
+}
+
+type fakeGate struct {
+	mu         sync.Mutex
+	loadErr    error
+	reserveErr error
+	releaseErr error
+	loaded     []int64
+	reserves   []gateCall
+	releases   []gateCall
+}
+
+func (g *fakeGate) Load(_ context.Context, d domain.Deal) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.loaded = append(g.loaded, d.ID())
+	return g.loadErr
+}
+
+func (g *fakeGate) TryReserve(ctx context.Context, dealID int64, userID string, qty, limit int) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.reserves = append(g.reserves, gateCall{dealID: dealID, userID: userID, qty: qty, limit: limit, ctxErr: ctx.Err()})
+	return g.reserveErr
+}
+
+func (g *fakeGate) Release(ctx context.Context, dealID int64, userID string, qty int) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.releases = append(g.releases, gateCall{dealID: dealID, userID: userID, qty: qty, ctxErr: ctx.Err()})
+	return g.releaseErr
+}
+
+type stockMove struct {
+	dealID int64
+	qty    int
+}
+
+type fakeDeals struct {
+	byID       map[int64]domain.Deal
+	nextID     int64
+	createErr  error
+	listErr    error
+	commitErr  error
+	releaseErr error
+	listArgs   []listCall
+	commits    []stockMove
+	releases   []stockMove
+}
+
+type listCall struct {
+	now     time.Time
+	afterID int64
+	limit   int
+}
+
+func newFakeDeals(deals ...domain.Deal) *fakeDeals {
+	f := &fakeDeals{byID: map[int64]domain.Deal{}, nextID: 100}
+	for _, d := range deals {
+		f.byID[d.ID()] = d
+	}
+	return f
+}
+
+func (f *fakeDeals) Create(_ context.Context, d domain.Deal) (domain.Deal, error) {
+	if f.createErr != nil {
+		return domain.Deal{}, f.createErr
+	}
+	f.nextID++
+	stored, err := domain.RestoreDeal(domain.DealState{
+		ID: f.nextID, ProductID: d.ProductID(), Title: d.Title(), Price: d.Price(),
+		TotalStock: d.TotalStock(), PerUserLimit: d.PerUserLimit(),
+		StartsAt: d.StartsAt(), EndsAt: d.EndsAt(), CreatedAt: t0, UpdatedAt: t0,
+	})
+	if err != nil {
+		return domain.Deal{}, err
+	}
+	f.byID[stored.ID()] = stored
+	return stored, nil
+}
+
+func (f *fakeDeals) GetByID(_ context.Context, id int64) (domain.Deal, error) {
+	d, ok := f.byID[id]
+	if !ok {
+		return domain.Deal{}, domain.ErrDealNotFound
+	}
+	return d, nil
+}
+
+func (f *fakeDeals) ListActive(_ context.Context, now time.Time, afterID int64, limit int) ([]domain.Deal, error) {
+	f.listArgs = append(f.listArgs, listCall{now: now, afterID: afterID, limit: limit})
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var out []domain.Deal
+	for id := afterID + 1; len(out) < limit && id <= f.nextID+1000; id++ {
+		if d, ok := f.byID[id]; ok && d.IsActive(now) {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeDeals) CommitReserved(_ context.Context, dealID int64, qty int) error {
+	f.commits = append(f.commits, stockMove{dealID, qty})
+	return f.commitErr
+}
+
+func (f *fakeDeals) ReleaseReserved(_ context.Context, dealID int64, qty int) error {
+	f.releases = append(f.releases, stockMove{dealID, qty})
+	return f.releaseErr
+}
+
+type fakeReservations struct {
+	byID      map[string]domain.Reservation
+	createErr error
+	// replayOf, when set, makes Create report an idempotent retry returning
+	// this stored reservation.
+	replayOf  *domain.Reservation
+	updateErr error
+	created   []domain.Reservation
+	updates   []domain.Reservation
+}
+
+func newFakeReservations(rs ...domain.Reservation) *fakeReservations {
+	f := &fakeReservations{byID: map[string]domain.Reservation{}}
+	for _, r := range rs {
+		f.byID[r.ID()] = r
+	}
+	return f
+}
+
+func (f *fakeReservations) Create(_ context.Context, r domain.Reservation) (domain.Reservation, bool, error) {
+	if f.createErr != nil {
+		return domain.Reservation{}, false, f.createErr
+	}
+	if f.replayOf != nil {
+		return *f.replayOf, false, nil
+	}
+	f.created = append(f.created, r)
+	f.byID[r.ID()] = r
+	return r, true, nil
+}
+
+func (f *fakeReservations) GetForUpdate(_ context.Context, id string) (domain.Reservation, error) {
+	r, ok := f.byID[id]
+	if !ok {
+		return domain.Reservation{}, domain.ErrReservationNotFound
+	}
+	return r, nil
+}
+
+func (f *fakeReservations) UpdateStatus(_ context.Context, r domain.Reservation) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	f.updates = append(f.updates, r)
+	f.byID[r.ID()] = r
+	return nil
+}
+
+type fakeOrders struct {
+	err     error
+	created []domain.Order
+}
+
+func (f *fakeOrders) Create(_ context.Context, o domain.Order) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.created = append(f.created, o)
+	return nil
+}
+
+// fakeTx runs fn directly and records how many transactions were opened.
+// It does not simulate rollback; tests assert on which steps ran instead.
+type fakeTx struct{ calls int }
+
+func (f *fakeTx) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	f.calls++
+	return fn(ctx)
+}
+
+// Fixtures.
+
+func usd(t *testing.T, cents int64) domain.Money {
+	t.Helper()
+	m, err := domain.NewMoney(cents, "USD")
+	require.NoError(t, err)
+	return m
+}
+
+// activeDeal returns a stored deal (ID 7) active around t0: price $49.99,
+// 100 units, per-user limit 2.
+func activeDeal(t *testing.T) domain.Deal {
+	t.Helper()
+	d, err := domain.RestoreDeal(domain.DealState{
+		ID: 7, ProductID: "sku-1", Title: "Headphones", Price: usd(t, 4999),
+		TotalStock: 100, PerUserLimit: 2,
+		StartsAt: t0.Add(-time.Hour), EndsAt: t0.Add(time.Hour),
+		CreatedAt: t0.Add(-2 * time.Hour), UpdatedAt: t0.Add(-2 * time.Hour),
+	})
+	require.NoError(t, err)
+	return d
+}
+
+// storedReservation returns a reservation of 2 units of deal 7 for user-1,
+// created at t0 and expiring at t0+5m, in the given status.
+func storedReservation(t *testing.T, status domain.ReservationStatus) domain.Reservation {
+	t.Helper()
+	r, err := domain.RestoreReservation(domain.ReservationState{
+		ID: "00000000-0000-7000-8000-999999999999", DealID: 7, UserID: "user-1", Quantity: 2,
+		Status: status, IdempotencyKey: "key-1",
+		ExpiresAt: t0.Add(5 * time.Minute), CreatedAt: t0, UpdatedAt: t0,
+	})
+	require.NoError(t, err)
+	return r
+}
