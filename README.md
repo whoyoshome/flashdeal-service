@@ -57,6 +57,9 @@ uses the body `{"code", "message", "request_id"}`.
   arrives with the Redis Lua gate in phase 4.
 - Unconfirmed reservations keep their units until the expiry worker lands in
   phase 5.
+- Under contention every reservation serializes on one `deals` row; see the
+  [PostgreSQL-only baseline](test/load/results/baseline-postgres.md). The
+  Redis gate in phase 4 exists to remove this bottleneck.
 
 ## Make targets
 
@@ -68,7 +71,7 @@ uses the body `{"code", "message", "request_id"}`.
 | `make test-integration` | Integration tests against real Postgres and Redis       |
 | `make lint`             | `golangci-lint` (including layer rules) + `govulncheck` |
 | `make lint-api`         | Validate `api/openapi.yaml` with Redocly (Docker)        |
-| `make load`             | k6 load scenario (phase 3)                              |
+| `make load`             | k6 flash-sale scenario against the running stack        |
 | `make build`            | Build the binary into `bin/`                            |
 
 ## Configuration

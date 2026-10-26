@@ -7,6 +7,10 @@ GO      ?= go
 .DEFAULT_GOAL := check
 
 REDOCLY_IMAGE ?= redocly/cli:2.71.1
+K6_IMAGE      ?= grafana/k6:2.3.0
+# k6 joins the Compose network and calls the api service directly.
+K6_NETWORK    ?= flashdeal_default
+LOAD_SUMMARY  ?= test/load/results/latest.json
 
 .PHONY: check up down migrate test test-integration lint lint-api load build tidy
 
@@ -45,9 +49,11 @@ lint:
 lint-api:
 	docker run --rm -v "$(CURDIR):/spec" -w /spec $(REDOCLY_IMAGE) lint api/openapi.yaml
 
-## load: k6 flash-sale scenario (arrives in phase 3)
+## load: k6 flash-sale scenario against the running stack (make up + make migrate first)
 load:
-	$(error the k6 scenario in test/load is not implemented yet; it arrives in phase 3)
+	docker run --rm --network $(K6_NETWORK) -v "$(CURDIR)/test/load:/load" \
+		-e STOCK -e PEAK_RPS -e RAMP -e HOLD -e BASE_URL \
+		$(K6_IMAGE) run --summary-export=/load/results/$(notdir $(LOAD_SUMMARY)) /load/flash_sale.js
 
 ## build: compile the API binary into bin/
 build:
