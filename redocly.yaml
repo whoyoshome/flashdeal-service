@@ -1,0 +1,7 @@
+# Redocly CLI config for linting api/openapi.yaml (`make lint-api`, CI).
+extends:
+  - recommended
+
+rules:
+  # The only server is the local Docker Compose stack.
+  no-server-example.com: off

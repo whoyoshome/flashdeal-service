@@ -17,6 +17,7 @@ High-concurrency flash-sale API in Go. Sells a limited stock during a short wind
 - `make test` — unit tests with `-race`
 - `make test-integration` — integration tests (`-tags=integration`, testcontainers)
 - `make lint` — `golangci-lint run` + `govulncheck ./...`
+- `make lint-api` — validate `api/openapi.yaml` with Redocly (Docker); run it whenever the contract changes
 - `make load` — k6 scenario in `test/load`
 - Before declaring any task done: `make lint test` must pass.
 

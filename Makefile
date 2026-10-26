@@ -6,7 +6,9 @@ GO      ?= go
 
 .DEFAULT_GOAL := check
 
-.PHONY: check up down migrate test test-integration lint load build tidy
+REDOCLY_IMAGE ?= redocly/cli:2.71.1
+
+.PHONY: check up down migrate test test-integration lint lint-api load build tidy
 
 ## check: lint and unit tests (required before declaring a task done)
 check: lint test
@@ -38,6 +40,10 @@ test-integration:
 lint:
 	golangci-lint run ./...
 	govulncheck ./...
+
+## lint-api: validate api/openapi.yaml with Redocly (runs in Docker)
+lint-api:
+	docker run --rm -v "$(CURDIR):/spec" -w /spec $(REDOCLY_IMAGE) lint api/openapi.yaml
 
 ## load: k6 flash-sale scenario (arrives in phase 3)
 load:

@@ -3,10 +3,9 @@
 High-concurrency flash-sale API in Go. It sells a limited stock during a short
 window with **zero overselling** under heavy load.
 
-> **Status:** phase 2 (PostgreSQL persistence). The domain model and the
-> repositories are in place; the business API arrives in phase 3. See the
-> implementation plan in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-> (section 7).
+> **Status:** phase 3 (use cases and HTTP API on a PostgreSQL-only baseline).
+> The Redis stock gate arrives in phase 4. See the implementation plan in
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (section 7).
 
 ## Requirements
 
@@ -34,10 +33,30 @@ Docker must be running.
 
 ## Endpoints
 
-| Method | Path       | Purpose                                                        |
-| ------ | ---------- | -------------------------------------------------------------- |
-| GET    | `/healthz` | Liveness: the process is up (never checks dependencies)        |
-| GET    | `/readyz`  | Readiness: PostgreSQL and Redis are reachable (`200` or `503`) |
+The full contract is in [`api/openapi.yaml`](api/openapi.yaml). Every error
+uses the body `{"code", "message", "request_id"}`.
+
+| Method   | Path                            | Purpose                                                        |
+| -------- | ------------------------------- | -------------------------------------------------------------- |
+| `POST`   | `/v1/deals`                     | Create a deal (admin)                                          |
+| `POST`   | `/v1/deals/{id}/activate`       | Open a deal's stock for reservations (admin)                  |
+| `GET`    | `/v1/deals/{id}`                | Get a deal with its approximate available stock                |
+| `GET`    | `/v1/deals?status=active`       | List active deals (cursor pagination)                          |
+| `POST`   | `/v1/deals/{id}/reservations`   | Reserve units; needs `X-User-ID` and `Idempotency-Key`         |
+| `POST`   | `/v1/reservations/{id}/confirm` | Confirm a reservation and create its order (`X-User-ID`)       |
+| `DELETE` | `/v1/reservations/{id}`         | Cancel a pending reservation (`X-User-ID`)                     |
+| `GET`    | `/healthz`                      | Liveness: the process is up (never checks dependencies)        |
+| `GET`    | `/readyz`                       | Readiness: PostgreSQL and Redis are reachable (`200` or `503`) |
+
+### Known limitations (phase 3)
+
+- Admin endpoints (`POST /v1/deals`, `/activate`) are not authenticated yet.
+- `X-User-ID` stands in for real authentication; the middleware is the seam
+  where JWT validation will go.
+- The per-user limit is enforced per request only; the cumulative limit
+  arrives with the Redis Lua gate in phase 4.
+- Unconfirmed reservations keep their units until the expiry worker lands in
+  phase 5.
 
 ## Make targets
 
@@ -48,6 +67,7 @@ Docker must be running.
 | `make test`             | Unit tests with the race detector                       |
 | `make test-integration` | Integration tests against real Postgres and Redis       |
 | `make lint`             | `golangci-lint` (including layer rules) + `govulncheck` |
+| `make lint-api`         | Validate `api/openapi.yaml` with Redocly (Docker)        |
 | `make load`             | k6 load scenario (phase 3)                              |
 | `make build`            | Build the binary into `bin/`                            |
 
