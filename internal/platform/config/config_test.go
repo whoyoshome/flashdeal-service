@@ -42,6 +42,8 @@ func TestLoad(t *testing.T) {
 		require.Equal(t, "localhost:6379", cfg.Redis.Addr)
 		require.Equal(t, 50, cfg.Redis.PoolSize)
 		require.Equal(t, 500*time.Millisecond, cfg.Redis.ReadTimeout)
+		require.Empty(t, cfg.Tracing.OTLPEndpoint, "tracing is off unless configured")
+		require.InDelta(t, 1.0, cfg.Tracing.SampleRatio, 0)
 	})
 
 	t.Run("reads overrides from the environment", func(t *testing.T) {
@@ -123,6 +125,8 @@ func TestLoadValidation(t *testing.T) {
 		{name: "rejects a non-positive expiry batch size", env: []string{"EXPIRE_BATCH_SIZE=0"}},
 		{name: "rejects a non-positive reconciliation interval", env: []string{"RECONCILE_EVERY=0s"}},
 		{name: "rejects a non-positive stock sample interval", env: []string{"STOCK_SAMPLE_EVERY=0s"}},
+		{name: "rejects a negative trace sample ratio", env: []string{"TRACING_SAMPLE_RATIO=-0.1"}},
+		{name: "rejects a trace sample ratio above 1", env: []string{"TRACING_SAMPLE_RATIO=1.5"}},
 		{
 			name: "rejects a reconciliation interval an in-flight reservation could outlast",
 			env:  []string{"REQUEST_TIMEOUT=5s", "RECONCILE_EVERY=10s"},

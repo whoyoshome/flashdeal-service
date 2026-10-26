@@ -56,6 +56,7 @@ type Config struct {
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
+	Tracing  Tracing  `envPrefix:"TRACING_"`
 }
 
 // Postgres configures the pgx connection pool.
@@ -66,6 +67,16 @@ type Postgres struct {
 	MinConns         int32         `env:"MIN_CONNS"         envDefault:"2"`
 	ConnectTimeout   time.Duration `env:"CONNECT_TIMEOUT"   envDefault:"5s"`
 	StatementTimeout time.Duration `env:"STATEMENT_TIMEOUT" envDefault:"5s"`
+}
+
+// Tracing configures OpenTelemetry trace export.
+type Tracing struct {
+	// OTLPEndpoint is the OTLP/HTTP base URL of the collector, for example
+	// http://jaeger:4318. Empty disables tracing.
+	OTLPEndpoint string `env:"OTLP_ENDPOINT"`
+	// SampleRatio is the share of new traces kept, from 0 to 1. Requests that
+	// arrive with a sampled parent are always kept.
+	SampleRatio float64 `env:"SAMPLE_RATIO" envDefault:"1"`
 }
 
 // Redis configures the go-redis client.
@@ -127,6 +138,9 @@ func (c Config) validate() error {
 	// compensation (2s). The extra second is margin.
 	if c.ReconcileEvery <= c.RequestTimeout+reconcileMargin {
 		errs = append(errs, fmt.Errorf("RECONCILE_EVERY must exceed REQUEST_TIMEOUT by more than %s", reconcileMargin))
+	}
+	if c.Tracing.SampleRatio < 0 || c.Tracing.SampleRatio > 1 {
+		errs = append(errs, errors.New("TRACING_SAMPLE_RATIO must be between 0 and 1"))
 	}
 	if c.Redis.PoolSize <= 0 {
 		errs = append(errs, errors.New("REDIS_POOL_SIZE must be positive"))
