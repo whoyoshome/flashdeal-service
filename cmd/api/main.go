@@ -20,6 +20,7 @@ import (
 	"github.com/whoyoshome/flashdeal-service/internal/platform/clock"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/config"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/logger"
+	"github.com/whoyoshome/flashdeal-service/internal/platform/observability"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/uuidgen"
 	"github.com/whoyoshome/flashdeal-service/internal/repository/postgres"
 	"github.com/whoyoshome/flashdeal-service/internal/repository/redisrepo"
@@ -33,6 +34,8 @@ const (
 	readTimeout       = 10 * time.Second
 	writeTimeout      = 10 * time.Second
 	idleTimeout       = 60 * time.Second
+	// adminWriteTimeout leaves room for a CPU profile, 30s by default.
+	adminWriteTimeout = 65 * time.Second
 )
 
 func main() {
@@ -94,6 +97,11 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	cancelReservation := usecase.NewCancel(dealRepo, resRepo, gate, txm, clk, log)
 	expire := usecase.NewExpire(resRepo, dealRepo, gate, txm, clk, cfg.ExpireBatchSize, log)
 	reconcile := usecase.NewReconcile(dealRepo, dealRepo, gate, clk)
+	stockLevels := usecase.NewStockLevels(dealRepo, gate, clk)
+
+	// Telemetry
+	metrics := observability.NewMetrics()
+	metrics.WatchPool(func() observability.PoolStats { return pool.Stat() })
 
 	// Delivery
 	srv := &http.Server{
@@ -108,6 +116,8 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 			Idempotency:    redisrepo.NewIdempotencyStore(rdb),
 			IdempotencyTTL: cfg.IdempotencyTTL,
 			RequestTimeout: cfg.RequestTimeout,
+			Metrics:        metrics,
+			MetricsHandler: metrics.Handler(),
 			ReadinessChecks: []httpapi.ReadinessCheck{
 				{Name: "postgres", Pinger: pool},
 				{Name: "redis", Pinger: redisrepo.NewPinger(rdb)},
@@ -120,34 +130,54 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 		IdleTimeout:       idleTimeout,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelError),
 	}
+	// Profiling lives on its own listener so it can stay private while the API
+	// is public.
+	admin := &http.Server{
+		Addr:              cfg.AdminAddr,
+		Handler:           observability.NewAdminHandler(),
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      adminWriteTimeout,
+		IdleTimeout:       idleTimeout,
+		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelError),
+	}
 
-	// Lifecycle: the server and the workers share gctx. If any component
+	// Lifecycle: the servers and the workers share gctx. If any component
 	// fails, gctx is cancelled and the rest shut down in order.
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		log.InfoContext(gctx, "http server listening", slog.String("addr", cfg.HTTPAddr))
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("http server: %w", err)
-		}
-		return nil
-	})
-	g.Go(func() error { return worker.NewExpirer(expire, cfg.ExpireEvery, log).Run(gctx) })
-	g.Go(func() error { return worker.NewReconciler(reconcile, cfg.ReconcileEvery, log).Run(gctx) })
+	g.Go(func() error { return listen(gctx, log, "http", srv) })
+	g.Go(func() error { return listen(gctx, log, "admin", admin) })
+	g.Go(func() error { return worker.NewExpirer(expire, cfg.ExpireEvery, metrics, log).Run(gctx) })
+	g.Go(func() error { return worker.NewReconciler(reconcile, cfg.ReconcileEvery, metrics, log).Run(gctx) })
+	g.Go(func() error { return worker.NewStockSampler(stockLevels, metrics, cfg.StockSampleEvery, log).Run(gctx) })
 	g.Go(func() error {
 		<-gctx.Done()
 		log.InfoContext(gctx, "shutting down", slog.String("timeout", cfg.ShutdownTimeout.String()))
 		// gctx is already cancelled; in-flight requests get their own budget.
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(gctx), cfg.ShutdownTimeout)
 		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("http shutdown: %w", err)
-		}
-		return nil
+		return errors.Join(shutdown(shutdownCtx, "http", srv), shutdown(shutdownCtx, "admin", admin))
 	})
 
 	if err := g.Wait(); err != nil {
 		return err
 	}
 	log.InfoContext(ctx, "stopped")
+	return nil
+}
+
+// listen serves srv until it is shut down.
+func listen(ctx context.Context, log *slog.Logger, name string, srv *http.Server) error {
+	log.InfoContext(ctx, "server listening", slog.String("server", name), slog.String("addr", srv.Addr))
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("%s server: %w", name, err)
+	}
+	return nil
+}
+
+func shutdown(ctx context.Context, name string, srv *http.Server) error {
+	if err := srv.Shutdown(ctx); err != nil {
+		return fmt.Errorf("%s shutdown: %w", name, err)
+	}
 	return nil
 }

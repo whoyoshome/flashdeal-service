@@ -40,6 +40,8 @@ services:
       REDIS_ADDR: redis:6379
     ports:
       - "8080:8080"
+      # pprof; bound to the host's loopback so it is never exposed.
+      - "127.0.0.1:6060:6060"
     depends_on:
       postgres:
         condition: service_healthy

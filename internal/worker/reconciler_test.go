@@ -29,11 +29,11 @@ func (f *fakeReconcile) Execute(ctx context.Context) (usecase.ReconcileResult, e
 	return f.run(ctx, call)
 }
 
-func startReconciler(ctx context.Context, runner *fakeReconcile, logs *bytes.Buffer) (stop func() error) {
+func startReconciler(ctx context.Context, runner *fakeReconcile, metrics *fakeMetrics, logs *bytes.Buffer) (stop func() error) {
 	ctx, cancel := context.WithCancel(ctx)
 	log := slog.New(slog.NewTextHandler(logs, nil))
 	done := make(chan error, 1)
-	go func() { done <- worker.NewReconciler(runner, interval, log).Run(ctx) }()
+	go func() { done <- worker.NewReconciler(runner, interval, metrics, log).Run(ctx) }()
 	return func() error {
 		cancel()
 		return <-done
@@ -48,7 +48,7 @@ func TestReconciler(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
 			runner := &fakeReconcile{}
-			stop := startReconciler(t.Context(), runner, &bytes.Buffer{})
+			stop := startReconciler(t.Context(), runner, &fakeMetrics{}, &bytes.Buffer{})
 
 			time.Sleep(2*interval + time.Second)
 			synctest.Wait()
@@ -58,20 +58,22 @@ func TestReconciler(t *testing.T) {
 		})
 	})
 
-	t.Run("warns about every repaired deal", func(t *testing.T) {
+	t.Run("warns about and counts every repaired deal", func(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
 			runner := &fakeReconcile{run: func(context.Context, int64) (usecase.ReconcileResult, error) {
 				return usecase.ReconcileResult{Checked: 3, Drifting: 1, Repaired: []usecase.StockRepair{{DealID: 7, From: 3, To: 5}}}, nil
 			}}
+			metrics := &fakeMetrics{}
 			var logs bytes.Buffer
-			stop := startReconciler(t.Context(), runner, &logs)
+			stop := startReconciler(t.Context(), runner, metrics, &logs)
 
 			time.Sleep(interval)
 			synctest.Wait()
 			require.NoError(t, stop())
 
 			require.Contains(t, logs.String(), `level=WARN msg="stock gate drift repaired" deal_id=7 gate_stock=3 available=5`)
+			require.EqualValues(t, 1, metrics.repaired.Load())
 		})
 	})
 
@@ -85,7 +87,7 @@ func TestReconciler(t *testing.T) {
 				return usecase.ReconcileResult{}, nil
 			}}
 			var logs bytes.Buffer
-			stop := startReconciler(t.Context(), runner, &logs)
+			stop := startReconciler(t.Context(), runner, &fakeMetrics{}, &logs)
 
 			time.Sleep(2 * interval)
 			synctest.Wait()
@@ -106,7 +108,7 @@ func TestReconciler(t *testing.T) {
 				return usecase.ReconcileResult{}, ctx.Err()
 			}}
 			var logs bytes.Buffer
-			stop := startReconciler(ctx, runner, &logs)
+			stop := startReconciler(ctx, runner, &fakeMetrics{}, &logs)
 
 			time.Sleep(interval)
 			synctest.Wait()

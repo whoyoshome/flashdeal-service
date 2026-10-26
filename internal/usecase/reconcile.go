@@ -7,9 +7,6 @@ import (
 	"github.com/whoyoshome/flashdeal-service/internal/domain"
 )
 
-// reconcilePageSize bounds how many active deals one query lists.
-const reconcilePageSize = 100
-
 // StockRepair records one deal whose gate was corrected.
 type StockRepair struct {
 	DealID int64
@@ -68,23 +65,13 @@ func NewReconcile(deals DealRepository, ledger StockLedger, gate GateRepair, clo
 // previous pass's observations are kept, so the next pass compares against
 // an even older state, which is only more conservative.
 func (uc *Reconcile) Execute(ctx context.Context) (ReconcileResult, error) {
-	now := uc.clock.Now()
 	var res ReconcileResult
 	seen := map[int64]observation{}
-	for afterID := int64(0); ; {
-		deals, err := uc.deals.ListActive(ctx, now, afterID, reconcilePageSize)
-		if err != nil {
-			return res, fmt.Errorf("list active deals: %w", err)
-		}
-		for _, d := range deals {
-			if err := uc.check(ctx, d, seen, &res); err != nil {
-				return res, err
-			}
-		}
-		if len(deals) < reconcilePageSize {
-			break
-		}
-		afterID = deals[len(deals)-1].ID()
+	err := forEachActiveDeal(ctx, uc.deals, uc.clock.Now(), func(d domain.Deal) error {
+		return uc.check(ctx, d, seen, &res)
+	})
+	if err != nil {
+		return res, err
 	}
 	uc.seen = seen
 	return res, nil

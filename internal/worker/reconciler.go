@@ -14,6 +14,12 @@ type ReconcileRunner interface {
 	Execute(ctx context.Context) (usecase.ReconcileResult, error)
 }
 
+// RepairMetrics counts stock gate repairs. platform/observability implements
+// it.
+type RepairMetrics interface {
+	StockGateRepaired(n int)
+}
+
 // Reconciler periodically corrects the stock gate from PostgreSQL. Its
 // interval is part of the correctness argument: passes must be further
 // apart than any reservation, cancellation or expiry can take (see
@@ -21,12 +27,13 @@ type ReconcileRunner interface {
 type Reconciler struct {
 	reconcile ReconcileRunner
 	interval  time.Duration
+	metrics   RepairMetrics
 	log       *slog.Logger
 }
 
 // NewReconciler returns a Reconciler that runs reconcile every interval.
-func NewReconciler(reconcile ReconcileRunner, interval time.Duration, log *slog.Logger) *Reconciler {
-	return &Reconciler{reconcile: reconcile, interval: interval, log: log}
+func NewReconciler(reconcile ReconcileRunner, interval time.Duration, metrics RepairMetrics, log *slog.Logger) *Reconciler {
+	return &Reconciler{reconcile: reconcile, interval: interval, metrics: metrics, log: log}
 }
 
 // Run blocks until ctx is cancelled. A failed pass is logged and retried on
@@ -38,6 +45,9 @@ func (r *Reconciler) Run(ctx context.Context) error {
 
 func (r *Reconciler) tick(ctx context.Context) {
 	res, err := r.reconcile.Execute(ctx)
+	if len(res.Repaired) > 0 {
+		r.metrics.StockGateRepaired(len(res.Repaired))
+	}
 	// A repair means a gate update was lost somewhere: worth a warning even
 	// though it is now fixed.
 	for _, fix := range res.Repaired {

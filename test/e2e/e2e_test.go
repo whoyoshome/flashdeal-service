@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -210,4 +211,39 @@ func TestReserveConfirmCancelFlow(t *testing.T) {
 	requireAvailable(t, deal, 2)
 	carol := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(unique("carol"), unique("key")))
 	require.Equal(t, http.StatusCreated, carol.Status, carol.RawBody)
+}
+
+func scrapeMetrics(t *testing.T) string {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/metrics", nil)
+	require.NoError(t, err)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, res.Body.Close()) }()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	raw, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	return string(raw)
+}
+
+// TestMetricsReportReservationsAndStock checks what the phase 6 dashboard
+// relies on: reservation outcomes, per-route latency and the stock left in
+// the gate for a deal, which the sampler publishes within a few seconds.
+func TestMetricsReportReservationsAndStock(t *testing.T) {
+	t.Parallel()
+	deal := createDeal(t, 1, 1, true)
+	require.Equal(t, http.StatusCreated, call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(unique("user"), unique("key"))).Status)
+	soldOut := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(unique("user"), unique("key")))
+	require.Equal(t, "SOLD_OUT", soldOut.Body["code"])
+
+	metrics := scrapeMetrics(t)
+	require.Contains(t, metrics, `reservations_total{result="created"}`)
+	require.Contains(t, metrics, `reservations_total{result="sold_out"}`)
+	require.Contains(t, metrics, `http_request_duration_seconds_bucket{method="POST",route="/v1/deals/{id}/reservations"`)
+	require.Contains(t, metrics, "db_pool_max_conns ")
+
+	stockLine := fmt.Sprintf(`stock_remaining{deal_id="%d"} 0`, deal)
+	require.Eventually(t, func() bool {
+		return strings.Contains(scrapeMetrics(t), stockLine)
+	}, 15*time.Second, 250*time.Millisecond, "the sampler publishes the deal's stock")
 }

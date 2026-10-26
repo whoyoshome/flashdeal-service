@@ -23,6 +23,7 @@ func TestLoad(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, ":8080", cfg.HTTPAddr)
+		require.Equal(t, ":6060", cfg.AdminAddr)
 		require.Equal(t, slog.LevelInfo, cfg.LogLevel)
 		require.Equal(t, 15*time.Second, cfg.ShutdownTimeout)
 		require.Equal(t, 2*time.Second, cfg.ReadinessTimeout)
@@ -33,6 +34,7 @@ func TestLoad(t *testing.T) {
 		require.Equal(t, 5*time.Second, cfg.ExpireEvery)
 		require.Equal(t, 100, cfg.ExpireBatchSize)
 		require.Equal(t, 30*time.Second, cfg.ReconcileEvery)
+		require.Equal(t, 5*time.Second, cfg.StockSampleEvery)
 		require.Equal(t, testPostgresURL, cfg.Postgres.URL)
 		require.EqualValues(t, 20, cfg.Postgres.MaxConns)
 		require.EqualValues(t, 2, cfg.Postgres.MinConns)
@@ -120,6 +122,7 @@ func TestLoadValidation(t *testing.T) {
 		{name: "rejects a non-positive expiry interval", env: []string{"EXPIRE_EVERY=0s"}},
 		{name: "rejects a non-positive expiry batch size", env: []string{"EXPIRE_BATCH_SIZE=0"}},
 		{name: "rejects a non-positive reconciliation interval", env: []string{"RECONCILE_EVERY=0s"}},
+		{name: "rejects a non-positive stock sample interval", env: []string{"STOCK_SAMPLE_EVERY=0s"}},
 		{
 			name: "rejects a reconciliation interval an in-flight reservation could outlast",
 			env:  []string{"REQUEST_TIMEOUT=5s", "RECONCILE_EVERY=10s"},

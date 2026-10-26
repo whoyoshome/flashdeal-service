@@ -47,6 +47,7 @@ uses the body `{"code", "message", "request_id"}`.
 | `DELETE` | `/v1/reservations/{id}`         | Cancel a pending reservation (`X-User-ID`)                     |
 | `GET`    | `/healthz`                      | Liveness: the process is up (never checks dependencies)        |
 | `GET`    | `/readyz`                       | Readiness: PostgreSQL and Redis are reachable (`200` or `503`) |
+| `GET`    | `/metrics`                      | Prometheus metrics (see [Observability](#observability))       |
 
 ### Behavior notes and known limitations
 
@@ -63,8 +64,8 @@ uses the body `{"code", "message", "request_id"}`.
 - Admin endpoints (`POST /v1/deals`, `/activate`) are not authenticated yet.
 - `X-User-ID` stands in for real authentication; the middleware is the seam
   where JWT validation will go.
-- Unconfirmed reservations keep their units until the expiry worker lands in
-  phase 5.
+- Unconfirmed reservations expire after `RESERVATION_TTL` (5 min); the
+  expirer returns their units within `EXPIRE_EVERY`.
 - Sold-out rejections are served from Redis in milliseconds, but successful
   reservations still serialize on one `deals` row (about 400 to 450 per second
   locally). See [phase 4 results](test/load/results/redis-gate.md); this is
@@ -105,6 +106,30 @@ on `SIGTERM`. Every replica runs them; they need no leader election.
   a compare-and-set, so it never fights an operation in flight. Repairs are
   logged as `stock gate drift repaired`. See
   [ADR 0005](docs/adr/0005-stock-gate-reconciliation.md).
+- **Stock sampler** (`STOCK_SAMPLE_EVERY`, default 5s): publishes the units
+  left in the gate for every active deal as `stock_remaining{deal_id}`.
+
+## Observability
+
+`GET /metrics` serves Prometheus metrics:
+
+| Metric                                     | What it shows                                                   |
+| ------------------------------------------ | --------------------------------------------------------------- |
+| `http_requests_total{method,route,status}` | Traffic per route pattern and status                            |
+| `http_request_duration_seconds{method,route}` | Latency histogram per route pattern                          |
+| `reservations_total{result}`               | Reservation attempts: `created`, `sold_out`, `user_limit_reached`, `request_timeout`, ... |
+| `stock_remaining{deal_id}`                 | Units left in the Redis gate per active deal                    |
+| `reservations_expired_total`               | Reservations returned to stock by the expirer                   |
+| `stock_gate_repairs_total`                 | Gates corrected by the reconciler (each one is a lost update)   |
+| `db_pool_*`                                | PostgreSQL pool usage and time spent waiting for a connection   |
+
+Profiling (`net/http/pprof`) is served on a separate admin listener,
+`ADMIN_ADDR` (default `:6060`), which Docker Compose publishes on
+`127.0.0.1` only. For example, a 10-second CPU profile:
+
+```bash
+go tool pprof "http://localhost:6060/debug/pprof/profile?seconds=10"
+```
 
 ## Project layout and rules
 

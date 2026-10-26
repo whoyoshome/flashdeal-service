@@ -23,6 +23,7 @@ var ErrInvalid = errors.New("invalid config")
 // passed down as values; no other package reads the environment.
 type Config struct {
 	HTTPAddr         string        `env:"HTTP_ADDR"         envDefault:":8080"`
+	AdminAddr        string        `env:"ADMIN_ADDR"        envDefault:":6060"` // pprof: never expose publicly
 	LogLevel         slog.Level    `env:"LOG_LEVEL"         envDefault:"info"`
 	ShutdownTimeout  time.Duration `env:"SHUTDOWN_TIMEOUT"  envDefault:"15s"`
 	ReadinessTimeout time.Duration `env:"READINESS_TIMEOUT" envDefault:"2s"`
@@ -49,6 +50,9 @@ type Config struct {
 	// interval, which proves nothing was in flight only if the interval
 	// outlasts the longest operation: see validate.
 	ReconcileEvery time.Duration `env:"RECONCILE_EVERY" envDefault:"30s"`
+	// StockSampleEvery is how often each replica publishes the stock left per
+	// active deal (stock_remaining). Match it to the Prometheus scrape interval.
+	StockSampleEvery time.Duration `env:"STOCK_SAMPLE_EVERY" envDefault:"5s"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
@@ -102,6 +106,7 @@ func (c Config) validate() error {
 		positive("DEAL_CACHE_TTL", c.DealCacheTTL),
 		positive("EXPIRE_EVERY", c.ExpireEvery),
 		positive("RECONCILE_EVERY", c.ReconcileEvery),
+		positive("STOCK_SAMPLE_EVERY", c.StockSampleEvery),
 		positive("POSTGRES_CONNECT_TIMEOUT", c.Postgres.ConnectTimeout),
 		positive("POSTGRES_STATEMENT_TIMEOUT", c.Postgres.StatementTimeout),
 		positive("REDIS_DIAL_TIMEOUT", c.Redis.DialTimeout),

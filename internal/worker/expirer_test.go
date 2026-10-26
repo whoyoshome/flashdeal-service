@@ -36,11 +36,11 @@ func (f *fakeRunner) Execute(ctx context.Context) (int, error) {
 
 // startExpirer runs an Expirer until stop is called, which cancels it and
 // returns what Run returned.
-func startExpirer(ctx context.Context, runner *fakeRunner, logs *bytes.Buffer) (stop func() error) {
+func startExpirer(ctx context.Context, runner *fakeRunner, metrics *fakeMetrics, logs *bytes.Buffer) (stop func() error) {
 	ctx, cancel := context.WithCancel(ctx)
 	log := slog.New(slog.NewTextHandler(logs, nil))
 	done := make(chan error, 1)
-	go func() { done <- worker.NewExpirer(runner, interval, log).Run(ctx) }()
+	go func() { done <- worker.NewExpirer(runner, interval, metrics, log).Run(ctx) }()
 	return func() error {
 		cancel()
 		return <-done
@@ -54,7 +54,7 @@ func TestExpirer(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
 			runner := &fakeRunner{}
-			stop := startExpirer(t.Context(), runner, &bytes.Buffer{})
+			stop := startExpirer(t.Context(), runner, &fakeMetrics{}, &bytes.Buffer{})
 
 			time.Sleep(3*interval + time.Second)
 			synctest.Wait()
@@ -65,18 +65,20 @@ func TestExpirer(t *testing.T) {
 		})
 	})
 
-	t.Run("logs how many reservations a run expired", func(t *testing.T) {
+	t.Run("logs and counts how many reservations a run expired", func(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
 			runner := &fakeRunner{run: func(context.Context, int64) (int, error) { return 4, nil }}
+			metrics := &fakeMetrics{}
 			var logs bytes.Buffer
-			stop := startExpirer(t.Context(), runner, &logs)
+			stop := startExpirer(t.Context(), runner, metrics, &logs)
 
 			time.Sleep(interval)
 			synctest.Wait()
 			require.NoError(t, stop())
 
 			require.Contains(t, logs.String(), `msg="reservations expired" count=4`)
+			require.EqualValues(t, 4, metrics.expired.Load())
 		})
 	})
 
@@ -90,7 +92,7 @@ func TestExpirer(t *testing.T) {
 				return 0, nil
 			}}
 			var logs bytes.Buffer
-			stop := startExpirer(t.Context(), runner, &logs)
+			stop := startExpirer(t.Context(), runner, &fakeMetrics{}, &logs)
 
 			time.Sleep(2 * interval)
 			synctest.Wait()
@@ -110,7 +112,7 @@ func TestExpirer(t *testing.T) {
 				return 0, ctx.Err()
 			}}
 			var logs bytes.Buffer
-			stop := startExpirer(ctx, runner, &logs)
+			stop := startExpirer(ctx, runner, &fakeMetrics{}, &logs)
 
 			time.Sleep(interval)
 			synctest.Wait()
