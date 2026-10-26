@@ -1,7 +1,9 @@
 # This file instructs Redocly's linter to ignore the rules contained for specific parts of your API.
 # See https://redocly.com/docs/cli/ for more information.
-# Health probes have no client errors to document: they only answer 200 or 503.
+# Health probes and the metrics endpoint have no client errors to document:
+# they take no input and only answer 200 (or 503 for readiness).
 api/openapi.yaml:
   operation-4xx-response:
     - '#/paths/~1healthz/get/responses'
     - '#/paths/~1readyz/get/responses'
+    - '#/paths/~1metrics/get/responses'

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: FlashDeal Service API
-  version: 0.6.0
+  version: 0.7.0
   summary: High-concurrency flash-sale API with zero overselling.
   description: |
     Sells a limited stock of a product during a short window. A user reserves
@@ -27,7 +27,7 @@ tags:
   - name: reservations
     description: Reserve, confirm and cancel units of a deal.
   - name: health
-    description: Liveness and readiness probes.
+    description: Liveness and readiness probes, and Prometheus metrics.
 
 paths:
   /v1/deals:
@@ -336,6 +336,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+
+  /metrics:
+    get:
+      tags: [health]
+      operationId: metrics
+      security: []
+      summary: Prometheus metrics
+      description: |
+        Metrics in the Prometheus text exposition format: HTTP traffic by
+        route, reservation outcomes (`reservations_total{result}`), units left
+        per active deal (`stock_remaining{deal_id}`), expiries, stock gate
+        repairs, connection pool usage and Go runtime metrics. Profiling
+        endpoints are served on a separate admin port, not here.
+      responses:
+        '200':
+          description: The current metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
 
 components:
   securitySchemes:

@@ -45,6 +45,14 @@ type Canceller interface {
 	Execute(ctx context.Context, in usecase.CancelInput) error
 }
 
+// Metrics records what the HTTP layer observes. platform/observability
+// implements it.
+type Metrics interface {
+	middleware.HTTPObserver
+	// ReservationAttempt counts one reservation attempt by its outcome.
+	ReservationAttempt(result string)
+}
+
 // Deps holds everything the HTTP layer needs. It is assembled in cmd/api,
 // the only place that knows the concrete implementations.
 type Deps struct {
@@ -64,18 +72,28 @@ type Deps struct {
 
 	// RequestTimeout bounds every /v1 request.
 	RequestTimeout time.Duration
+	// Metrics records requests and reservation outcomes; nil disables it.
+	Metrics Metrics
+	// MetricsHandler serves GET /metrics; nil leaves the route out.
+	MetricsHandler http.Handler
+
 	// ReadinessChecks are probed by GET /readyz.
 	ReadinessChecks []ReadinessCheck
 	// ReadinessTimeout bounds each individual readiness probe.
 	ReadinessTimeout time.Duration
 }
 
-// NewRouter builds the HTTP handler tree. Health endpoints sit outside /v1
-// so frequent orchestrator probes are neither access-logged nor timed out
-// with the business routes.
+// NewRouter builds the HTTP handler tree. Health and metrics endpoints sit
+// outside /v1 so frequent probes and scrapes are neither access-logged,
+// measured nor timed out with the business routes.
 func NewRouter(d Deps) http.Handler {
+	metrics := d.Metrics
+	if metrics == nil {
+		metrics = noMetrics{}
+	}
 	h := &handlers{
 		log:              d.Log,
+		metrics:          metrics,
 		deals:            d.Deals,
 		queries:          d.Queries,
 		reserver:         d.Reserve,
@@ -92,9 +110,12 @@ func NewRouter(d Deps) http.Handler {
 
 	r.Get("/healthz", h.liveness)
 	r.Get("/readyz", h.readiness)
+	if d.MetricsHandler != nil {
+		r.Method(http.MethodGet, "/metrics", d.MetricsHandler)
+	}
 
 	r.Route("/v1", func(r chi.Router) {
-		r.Use(middleware.Logging(d.Log), middleware.Timeout(d.RequestTimeout))
+		r.Use(middleware.Logging(d.Log), middleware.Metrics(metrics), middleware.Timeout(d.RequestTimeout))
 
 		// Admin endpoints are not authenticated yet (pending, see README).
 		r.Post("/deals", h.createDeal)
@@ -128,6 +149,7 @@ func idempotency(d Deps) []func(http.Handler) http.Handler {
 
 type handlers struct {
 	log              *slog.Logger
+	metrics          Metrics
 	deals            DealManager
 	queries          DealFinder
 	reserver         Reserver
@@ -136,3 +158,10 @@ type handlers struct {
 	readinessChecks  []ReadinessCheck
 	readinessTimeout time.Duration
 }
+
+// noMetrics discards observations when no Metrics is configured.
+type noMetrics struct{}
+
+func (noMetrics) ObserveHTTP(string, string, int, time.Duration) {}
+
+func (noMetrics) ReservationAttempt(string) {}

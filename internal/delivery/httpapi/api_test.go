@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,12 +95,32 @@ func (f *fakeCanceller) Execute(_ context.Context, in usecase.CancelInput) error
 	return f.err
 }
 
+// fakeMetrics records what the HTTP layer reports.
+type fakeMetrics struct {
+	mu           sync.Mutex
+	routes       []string
+	reservations []string
+}
+
+func (m *fakeMetrics) ObserveHTTP(method, route string, status int, _ time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.routes = append(m.routes, fmt.Sprintf("%s %s %d", method, route, status))
+}
+
+func (m *fakeMetrics) ReservationAttempt(result string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reservations = append(m.reservations, result)
+}
+
 type api struct {
 	deals     *fakeDealManager
 	queries   *fakeDealFinder
 	reserver  *fakeReserver
 	confirmer *fakeConfirmer
 	canceller *fakeCanceller
+	metrics   *fakeMetrics
 	logs      *bytes.Buffer
 	handler   http.Handler
 }
@@ -112,6 +133,7 @@ func newAPI(t *testing.T) *api {
 		reserver:  &fakeReserver{res: sampleReservation(t)},
 		confirmer: &fakeConfirmer{order: sampleOrder(t)},
 		canceller: &fakeCanceller{},
+		metrics:   &fakeMetrics{},
 		logs:      &bytes.Buffer{},
 	}
 	a.handler = httpapi.NewRouter(httpapi.Deps{
@@ -121,6 +143,8 @@ func newAPI(t *testing.T) *api {
 		Reserve:        a.reserver,
 		Confirm:        a.confirmer,
 		Cancel:         a.canceller,
+		Metrics:        a.metrics,
+		MetricsHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("# metrics\n")) }),
 		RequestTimeout: 5 * time.Second,
 	})
 	return a
@@ -569,5 +593,63 @@ func TestErrorHandling(t *testing.T) {
 		rec := a.do(t, call{method: http.MethodGet, path: "/v1/deals/7"})
 
 		require.Equal(t, "req-test", rec.Header().Get("X-Request-ID"))
+	})
+}
+
+func TestMetricsReporting(t *testing.T) {
+	t.Parallel()
+
+	results := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "a created reservation", want: "created"},
+		{name: "a sold-out rejection", err: domain.ErrSoldOut, want: "sold_out"},
+		{name: "a per-user limit rejection", err: domain.ErrUserLimitReached, want: "user_limit_reached"},
+		{name: "a closed gate", err: domain.ErrStockUnavailable, want: "stock_unavailable"},
+		{name: "a request timeout", err: fmt.Errorf("persist: %w", context.DeadlineExceeded), want: "request_timeout"},
+		{name: "an unexpected failure", err: errors.New("boom"), want: "internal"},
+	}
+	for _, tc := range results {
+		t.Run("counts "+tc.name+" as "+tc.want, func(t *testing.T) {
+			t.Parallel()
+			a := newAPI(t)
+			a.reserver.err = tc.err
+
+			a.do(t, reserveCall(`{"quantity":2}`))
+
+			require.Equal(t, []string{tc.want}, a.metrics.reservations)
+		})
+	}
+
+	t.Run("counts a request rejected before the use case by its error code", func(t *testing.T) {
+		t.Parallel()
+		a := newAPI(t)
+
+		a.do(t, reserveCall(`{"qty":2}`))
+
+		require.Equal(t, []string{"validation_error"}, a.metrics.reservations)
+	})
+
+	t.Run("observes /v1 requests by route pattern", func(t *testing.T) {
+		t.Parallel()
+		a := newAPI(t)
+		a.reserver.err = domain.ErrSoldOut
+
+		a.do(t, reserveCall(`{"quantity":2}`))
+
+		require.Equal(t, []string{"POST /v1/deals/{id}/reservations 409"}, a.metrics.routes)
+	})
+
+	t.Run("serves /metrics outside /v1, without observing the scrape", func(t *testing.T) {
+		t.Parallel()
+		a := newAPI(t)
+
+		rec := a.do(t, call{method: http.MethodGet, path: "/metrics"})
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, "# metrics\n", rec.Body.String())
+		require.Empty(t, a.metrics.routes)
 	})
 }
