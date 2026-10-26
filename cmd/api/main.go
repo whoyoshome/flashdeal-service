@@ -24,6 +24,7 @@ import (
 	"github.com/whoyoshome/flashdeal-service/internal/repository/postgres"
 	"github.com/whoyoshome/flashdeal-service/internal/repository/redisrepo"
 	"github.com/whoyoshome/flashdeal-service/internal/usecase"
+	"github.com/whoyoshome/flashdeal-service/internal/worker"
 )
 
 // Server timeouts protect against slow clients holding connections open.
@@ -91,6 +92,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	reserve := usecase.NewReserve(dealCache, gate, resRepo, clk, ids, cfg.ReservationTTL, log)
 	confirm := usecase.NewConfirm(dealRepo, dealRepo, resRepo, orderRepo, txm, clk, ids)
 	cancelReservation := usecase.NewCancel(dealRepo, resRepo, gate, txm, clk, log)
+	expire := usecase.NewExpire(resRepo, dealRepo, gate, txm, clk, cfg.ExpireBatchSize, log)
 
 	// Delivery
 	srv := &http.Server{
@@ -118,8 +120,8 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelError),
 	}
 
-	// Lifecycle: if any component fails, gctx is cancelled and the rest
-	// shut down in order.
+	// Lifecycle: the server and the workers share gctx. If any component
+	// fails, gctx is cancelled and the rest shut down in order.
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		log.InfoContext(gctx, "http server listening", slog.String("addr", cfg.HTTPAddr))
@@ -128,6 +130,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 		}
 		return nil
 	})
+	g.Go(func() error { return worker.NewExpirer(expire, cfg.ExpireEvery, log).Run(gctx) })
 	g.Go(func() error {
 		<-gctx.Done()
 		log.InfoContext(gctx, "shutting down", slog.String("timeout", cfg.ShutdownTimeout.String()))

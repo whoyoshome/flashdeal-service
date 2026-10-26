@@ -89,6 +89,16 @@ uses the body `{"code", "message", "request_id"}`.
 All configuration comes from environment variables; see
 [`.env.example`](.env.example) for the full list and defaults.
 
+## Background workers
+
+Workers run inside the API process, share its lifecycle and stop with it
+on `SIGTERM`. Every replica runs them; they need no leader election.
+
+- **Expirer** (`EXPIRE_EVERY`, default 5s): marks pending reservations
+  past their TTL as `expired` and returns their units to the deal and to
+  the Redis gate. Batches of `EXPIRE_BATCH_SIZE` rows are claimed with
+  `FOR UPDATE SKIP LOCKED`, so replicas never process the same row.
+
 ## Project layout and rules
 
 - Design and rationale: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (Spanish)

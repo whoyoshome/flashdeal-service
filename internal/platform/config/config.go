@@ -34,6 +34,12 @@ type Config struct {
 	// design): long enough to absorb an opening burst, short enough that the
 	// approximate stock shown to clients stays close to reality.
 	DealCacheTTL time.Duration `env:"DEAL_CACHE_TTL" envDefault:"2s"`
+	// ExpireEvery is how often each replica looks for reservations whose TTL
+	// elapsed; units of an abandoned reservation return at most this late.
+	ExpireEvery time.Duration `env:"EXPIRE_EVERY" envDefault:"5s"`
+	// ExpireBatchSize bounds how many reservations one expiry transaction
+	// locks, keeping row locks on the deals short.
+	ExpireBatchSize int `env:"EXPIRE_BATCH_SIZE" envDefault:"100"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
@@ -85,6 +91,7 @@ func (c Config) validate() error {
 		positive("RESERVATION_TTL", c.ReservationTTL),
 		positive("IDEMPOTENCY_TTL", c.IdempotencyTTL),
 		positive("DEAL_CACHE_TTL", c.DealCacheTTL),
+		positive("EXPIRE_EVERY", c.ExpireEvery),
 		positive("POSTGRES_CONNECT_TIMEOUT", c.Postgres.ConnectTimeout),
 		positive("POSTGRES_STATEMENT_TIMEOUT", c.Postgres.StatementTimeout),
 		positive("REDIS_DIAL_TIMEOUT", c.Redis.DialTimeout),
@@ -96,6 +103,9 @@ func (c Config) validate() error {
 	}
 	if c.Postgres.MinConns < 0 || c.Postgres.MinConns > c.Postgres.MaxConns {
 		errs = append(errs, errors.New("POSTGRES_MIN_CONNS must be between 0 and POSTGRES_MAX_CONNS"))
+	}
+	if c.ExpireBatchSize <= 0 {
+		errs = append(errs, errors.New("EXPIRE_BATCH_SIZE must be positive"))
 	}
 	if c.Redis.PoolSize <= 0 {
 		errs = append(errs, errors.New("REDIS_POOL_SIZE must be positive"))
