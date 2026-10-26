@@ -54,3 +54,4 @@ For example, a gentle run: `STOCK=1000 PEAK_RPS=1000 RAMP=10s HOLD=30s make load
 ## Results
 
 - [Phase 3 baseline: PostgreSQL only](results/baseline-postgres.md)
+- [Phase 4: Redis gate and deal cache vs baseline](results/redis-gate.md)

@@ -65,6 +65,10 @@ uses the body `{"code", "message", "request_id"}`.
   where JWT validation will go.
 - Unconfirmed reservations keep their units until the expiry worker lands in
   phase 5.
+- Sold-out rejections are served from Redis in milliseconds, but successful
+  reservations still serialize on one `deals` row (about 400 to 450 per second
+  locally). See [phase 4 results](test/load/results/redis-gate.md); this is
+  the bottleneck carried to phase 7.
 
 ## Make targets
 

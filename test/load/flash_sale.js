@@ -14,7 +14,7 @@
 // cannot start because every VU is still waiting are reported as
 // dropped_iterations: offered load the service did not absorb.
 import http from 'k6/http';
-import { check } from 'k6';
+import { check, sleep } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 
 const BASE_URL = __ENV.BASE_URL || 'http://api:8080';
@@ -125,11 +125,19 @@ export default function (data) {
 }
 
 // teardown reads the deal back: after the burst, every unit must be held
-// and none may be oversold.
+// and none may be oversold. Single-deal reads are cached for a few seconds
+// (DEAL_CACHE_TTL), so it polls until the snapshot catches up.
 export function teardown(data) {
-  const deal = http.get(`${BASE_URL}/v1/deals/${data.dealId}`, {
-    responseCallback: http.expectedStatuses(200),
-  }).json();
+  let deal;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    deal = http.get(`${BASE_URL}/v1/deals/${data.dealId}`, {
+      responseCallback: http.expectedStatuses(200),
+    }).json();
+    if (deal.available_stock === 0) {
+      break;
+    }
+    sleep(0.5);
+  }
   console.log(
     `deal ${data.dealId}: total_stock=${deal.total_stock} available_stock=${deal.available_stock}`,
   );
