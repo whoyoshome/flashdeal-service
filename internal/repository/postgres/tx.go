@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -13,6 +14,10 @@ import (
 )
 
 var _ usecase.TxManager = (*TxManager)(nil)
+
+// finishTimeout bounds COMMIT and ROLLBACK, which run detached from the
+// caller's cancellation and therefore need their own deadline.
+const finishTimeout = 2 * time.Second
 
 // txKey is the context key under which the active transaction travels.
 type txKey struct{}
@@ -58,7 +63,8 @@ func withinTx(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Conte
 		}
 		// Roll back even if ctx was cancelled; a dead request must not leave
 		// a transaction open on the server.
-		rbCtx := context.WithoutCancel(ctx)
+		rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
+		defer cancel()
 		if rbErr := tx.Rollback(rbCtx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
 			err = errors.Join(err, fmt.Errorf("rollback tx: %w", rbErr))
 		}
@@ -67,7 +73,13 @@ func withinTx(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Conte
 	if err := fn(context.WithValue(ctx, txKey{}, tx)); err != nil {
 		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	// Once fn succeeded the outcome is decided, so COMMIT must not depend on
+	// whether the caller is still waiting. Cancelling it mid-flight leaves the
+	// result unknown: under load the commit landed in PostgreSQL while the
+	// client got a 500, holding stock nobody knew about.
+	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
+	defer cancel()
+	if err := tx.Commit(commitCtx); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
 	return nil

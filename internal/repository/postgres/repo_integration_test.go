@@ -53,6 +53,27 @@ func TestTxManager(t *testing.T) {
 		require.Zero(t, reloadDeal(t, d.ID()).Reserved())
 	})
 
+	t.Run("commits once fn succeeded even if the caller's context is cancelled", func(t *testing.T) {
+		t.Parallel()
+		d := createDeal(t, dealOpts{stock: 10})
+		reservations := postgres.NewReservationRepo(testPool)
+		res := newReservation(t, d.ID(), uniqueUser(), "k", 1)
+		ctx, cancel := context.WithCancel(t.Context())
+
+		err := txm.WithinTx(ctx, func(ctx context.Context) error {
+			if _, _, err := reservations.Create(ctx, res); err != nil {
+				return err
+			}
+			cancel() // the client gives up after the work is done, before COMMIT
+			return nil
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, 1, reloadDeal(t, d.ID()).Reserved())
+		_, err = reservations.GetForUpdate(t.Context(), res.ID())
+		require.NoError(t, err, "the committed reservation must exist")
+	})
+
 	t.Run("joins the outer transaction instead of committing a nested one", func(t *testing.T) {
 		t.Parallel()
 		d := createDeal(t, dealOpts{stock: 10})
