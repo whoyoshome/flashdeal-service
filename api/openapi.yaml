@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: FlashDeal Service API
-  version: 0.3.0
+  version: 0.4.0
   summary: High-concurrency flash-sale API with zero overselling.
   description: |
     Sells a limited stock of a product during a short window. A user reserves
@@ -56,6 +56,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     get:
       tags: [deals]
       operationId: listDeals
@@ -96,6 +98,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /v1/deals/{id}:
     parameters:
@@ -121,6 +125,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /v1/deals/{id}/activate:
     parameters:
@@ -149,6 +155,8 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /v1/deals/{id}/reservations:
     parameters:
@@ -193,7 +201,7 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
-          $ref: '#/components/responses/StockUnavailable'
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /v1/reservations/{id}/confirm:
     parameters:
@@ -227,6 +235,8 @@ paths:
           $ref: '#/components/responses/Expired'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /v1/reservations/{id}:
     parameters:
@@ -254,6 +264,8 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /healthz:
     get:
@@ -518,6 +530,7 @@ components:
             - STOCK_UNAVAILABLE
             - UNAUTHENTICATED
             - METHOD_NOT_ALLOWED
+            - REQUEST_TIMEOUT
             - INTERNAL
         message:
           type: string
@@ -558,8 +571,18 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-    StockUnavailable:
-      description: The stock gate is unreachable; the service fails closed (`STOCK_UNAVAILABLE`).
+    ServiceUnavailable:
+      description: |
+        Temporarily unable to serve the request; retry after `Retry-After`
+        seconds. `STOCK_UNAVAILABLE`: the stock gate is unreachable and the
+        service fails closed. `REQUEST_TIMEOUT`: the request exceeded its
+        time budget, usually under overload; nothing was written, and a retry
+        with the same `Idempotency-Key` is safe.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying (only on `REQUEST_TIMEOUT`).
+          schema:
+            type: integer
       content:
         application/json:
           schema:

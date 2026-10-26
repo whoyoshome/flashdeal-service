@@ -516,6 +516,28 @@ func TestErrorHandling(t *testing.T) {
 		require.Contains(t, a.logs.String(), "10.0.0.5")
 	})
 
+	t.Run("maps a request deadline to a retryable 503 REQUEST_TIMEOUT", func(t *testing.T) {
+		t.Parallel()
+		a := newAPI(t)
+		a.reserver.err = fmt.Errorf("persist reservation: reserve stock on deal 7: timeout: %w", context.DeadlineExceeded)
+
+		rec := a.do(t, reserveCall(`{"quantity":1}`))
+
+		body := requireError(t, rec, http.StatusServiceUnavailable, "REQUEST_TIMEOUT")
+		require.Equal(t, "request timed out, retry later", body.Message)
+		require.Equal(t, "1", rec.Header().Get("Retry-After"))
+		require.NotContains(t, rec.Body.String(), "deal 7", "internal details stay in the log")
+		require.Contains(t, a.logs.String(), "request timed out")
+	})
+
+	t.Run("prefers the domain code when a domain error wraps a deadline", func(t *testing.T) {
+		t.Parallel()
+		a := newAPI(t)
+		a.reserver.err = fmt.Errorf("%w: %w", domain.ErrStockUnavailable, context.DeadlineExceeded)
+
+		requireError(t, a.do(t, reserveCall(`{"quantity":1}`)), http.StatusServiceUnavailable, "STOCK_UNAVAILABLE")
+	})
+
 	t.Run("hides corrupt state errors behind a generic 500", func(t *testing.T) {
 		t.Parallel()
 		a := newAPI(t)
