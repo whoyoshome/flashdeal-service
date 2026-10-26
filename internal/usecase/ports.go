@@ -18,12 +18,43 @@ type TxManager interface {
 	WithinTx(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
-// DealRepository stores and reads deals.
-type DealRepository interface {
-	// Create persists a new deal and returns it with its assigned ID.
-	Create(ctx context.Context, d domain.Deal) (domain.Deal, error)
+// Clock tells the current time. Injected so time-dependent rules (windows,
+// TTLs) are testable without sleeping.
+type Clock interface {
+	Now() time.Time
+}
+
+// IDGenerator creates identifiers for new reservations and orders.
+type IDGenerator interface {
+	New() (string, error)
+}
+
+// StockGate admits or rejects reservations before they reach PostgreSQL,
+// so most rejections never touch the database. It is the first line of
+// defense; PostgreSQL constraints remain the source of truth.
+type StockGate interface {
+	// Load opens a deal's stock for reservations.
+	Load(ctx context.Context, d domain.Deal) error
+	// TryReserve takes qty units for userID, enforcing perUserLimit. It
+	// returns domain.ErrSoldOut, domain.ErrUserLimitReached or, when the
+	// gate is unreachable, domain.ErrStockUnavailable.
+	TryReserve(ctx context.Context, dealID int64, userID string, qty, perUserLimit int) error
+	// Release gives back units taken by TryReserve.
+	Release(ctx context.Context, dealID int64, userID string, qty int) error
+}
+
+// DealReader loads a single deal. It is split from DealRepository so the
+// reservation hot path can be served by a cache later.
+type DealReader interface {
 	// GetByID returns domain.ErrDealNotFound when the deal does not exist.
 	GetByID(ctx context.Context, id int64) (domain.Deal, error)
+}
+
+// DealRepository stores and reads deals.
+type DealRepository interface {
+	DealReader
+	// Create persists a new deal and returns it with its assigned ID.
+	Create(ctx context.Context, d domain.Deal) (domain.Deal, error)
 	// ListActive returns deals whose window contains now, ordered by ID,
 	// starting after the afterID cursor (0 for the first page).
 	ListActive(ctx context.Context, now time.Time, afterID int64, limit int) ([]domain.Deal, error)
