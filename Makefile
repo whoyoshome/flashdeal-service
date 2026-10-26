@@ -12,7 +12,7 @@ K6_IMAGE      ?= grafana/k6:2.3.0
 K6_NETWORK    ?= flashdeal_default
 LOAD_SUMMARY  ?= test/load/results/latest.json
 
-.PHONY: check up down migrate test test-integration lint lint-api load build tidy
+.PHONY: check up down migrate test test-integration test-e2e lint lint-api load build tidy
 
 ## check: lint and unit tests (required before declaring a task done)
 check: lint test
@@ -39,6 +39,10 @@ test:
 ## test-integration: integration tests against real Postgres and Redis
 test-integration:
 	$(GO) test -race -count=1 -tags=integration ./...
+
+## test-e2e: end-to-end tests over HTTP against the running stack (make up + make migrate first)
+test-e2e:
+	$(GO) test -count=1 -tags=e2e ./test/e2e/...
 
 ## lint: static analysis, layer rules (depguard) and known vulnerabilities
 lint:

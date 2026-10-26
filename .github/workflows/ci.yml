@@ -50,6 +50,24 @@ jobs:
       - name: Integration tests (testcontainers)
         run: go test -race -count=1 -tags=integration ./...
 
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Start the stack
+        run: make up && make migrate
+      - name: End-to-end tests
+        run: make test-e2e
+      - name: API logs
+        if: failure()
+        run: docker compose logs api
+      - name: Stop the stack
+        if: always()
+        run: make down
+
   image:
     runs-on: ubuntu-latest
     needs: [lint, test]

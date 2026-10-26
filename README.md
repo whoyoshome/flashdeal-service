@@ -56,6 +56,10 @@ uses the body `{"code", "message", "request_id"}`.
   holds under parallel requests (enforced atomically in Redis).
 - If Redis is unreachable, reservations fail closed with `503
   STOCK_UNAVAILABLE`; nothing is sold without the gate.
+- Reservations are idempotent per user and `Idempotency-Key`: a retry replays
+  the original response (marked `Idempotency-Replayed: true`) for 24 h, and a
+  retry while the first request is still running gets `409
+  IDEMPOTENCY_IN_PROGRESS`.
 - Admin endpoints (`POST /v1/deals`, `/activate`) are not authenticated yet.
 - `X-User-ID` stands in for real authentication; the middleware is the seam
   where JWT validation will go.
@@ -70,6 +74,7 @@ uses the body `{"code", "message", "request_id"}`.
 | `make migrate`          | Apply database migrations (golang-migrate container)    |
 | `make test`             | Unit tests with the race detector                       |
 | `make test-integration` | Integration tests against real Postgres and Redis       |
+| `make test-e2e`         | End-to-end tests over HTTP against the running stack     |
 | `make lint`             | `golangci-lint` (including layer rules) + `govulncheck` |
 | `make lint-api`         | Validate `api/openapi.yaml` with Redocly (Docker)        |
 | `make load`             | k6 flash-sale scenario against the running stack        |
