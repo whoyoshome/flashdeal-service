@@ -22,6 +22,11 @@ type Config struct {
 	LogLevel         slog.Level    `env:"LOG_LEVEL"         envDefault:"info"`
 	ShutdownTimeout  time.Duration `env:"SHUTDOWN_TIMEOUT"  envDefault:"15s"`
 	ReadinessTimeout time.Duration `env:"READINESS_TIMEOUT" envDefault:"2s"`
+	// RequestTimeout bounds each /v1 request; keep it below the server's
+	// 10s write timeout so the handler, not the connection, times out first.
+	RequestTimeout time.Duration `env:"REQUEST_TIMEOUT" envDefault:"5s"`
+	// ReservationTTL is how long a reservation holds its units.
+	ReservationTTL time.Duration `env:"RESERVATION_TTL" envDefault:"5m"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
@@ -69,6 +74,8 @@ func (c Config) validate() error {
 	errs := []error{
 		positive("SHUTDOWN_TIMEOUT", c.ShutdownTimeout),
 		positive("READINESS_TIMEOUT", c.ReadinessTimeout),
+		positive("REQUEST_TIMEOUT", c.RequestTimeout),
+		positive("RESERVATION_TTL", c.ReservationTTL),
 		positive("POSTGRES_CONNECT_TIMEOUT", c.Postgres.ConnectTimeout),
 		positive("POSTGRES_STATEMENT_TIMEOUT", c.Postgres.StatementTimeout),
 		positive("REDIS_DIAL_TIMEOUT", c.Redis.DialTimeout),

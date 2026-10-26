@@ -17,10 +17,13 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/whoyoshome/flashdeal-service/internal/delivery/httpapi"
+	"github.com/whoyoshome/flashdeal-service/internal/platform/clock"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/config"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/logger"
+	"github.com/whoyoshome/flashdeal-service/internal/platform/uuidgen"
 	"github.com/whoyoshome/flashdeal-service/internal/repository/postgres"
 	"github.com/whoyoshome/flashdeal-service/internal/repository/redisrepo"
+	"github.com/whoyoshome/flashdeal-service/internal/usecase"
 )
 
 // Server timeouts protect against slow clients holding connections open.
@@ -68,11 +71,35 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 		}
 	}()
 
+	// Adapters
+	clk := clock.System{}
+	ids := uuidgen.V7{}
+	txm := postgres.NewTxManager(pool)
+	dealRepo := postgres.NewDealRepo(pool)
+	resRepo := postgres.NewReservationRepo(pool)
+	orderRepo := postgres.NewOrderRepo(pool)
+	// Phase 3 baseline: PostgreSQL alone decides stock. Phase 4 swaps in
+	// the Redis gate here and nowhere else.
+	gate := postgres.NewStockGate()
+
+	// Use cases
+	manageDeals := usecase.NewManageDeals(dealRepo, gate, clk)
+	dealQueries := usecase.NewDealQueries(dealRepo, clk)
+	reserve := usecase.NewReserve(dealRepo, gate, resRepo, clk, ids, cfg.ReservationTTL, log)
+	confirm := usecase.NewConfirm(dealRepo, dealRepo, resRepo, orderRepo, txm, clk, ids)
+	cancelReservation := usecase.NewCancel(dealRepo, resRepo, gate, txm, clk, log)
+
 	// Delivery
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.NewRouter(httpapi.Deps{
-			Log: log,
+			Log:            log,
+			Deals:          manageDeals,
+			Queries:        dealQueries,
+			Reserve:        reserve,
+			Confirm:        confirm,
+			Cancel:         cancelReservation,
+			RequestTimeout: cfg.RequestTimeout,
 			ReadinessChecks: []httpapi.ReadinessCheck{
 				{Name: "postgres", Pinger: pool},
 				{Name: "redis", Pinger: redisrepo.NewPinger(rdb)},
