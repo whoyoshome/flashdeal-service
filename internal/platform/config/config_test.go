@@ -29,6 +29,7 @@ func TestLoad(t *testing.T) {
 		require.Equal(t, 5*time.Second, cfg.RequestTimeout)
 		require.Equal(t, 5*time.Minute, cfg.ReservationTTL)
 		require.Equal(t, 24*time.Hour, cfg.IdempotencyTTL)
+		require.Equal(t, 2*time.Second, cfg.DealCacheTTL)
 		require.Equal(t, testPostgresURL, cfg.Postgres.URL)
 		require.EqualValues(t, 20, cfg.Postgres.MaxConns)
 		require.EqualValues(t, 2, cfg.Postgres.MinConns)
@@ -112,6 +113,7 @@ func TestLoadValidation(t *testing.T) {
 		{name: "rejects a non-positive request timeout", env: []string{"REQUEST_TIMEOUT=0s"}},
 		{name: "rejects a non-positive reservation TTL", env: []string{"RESERVATION_TTL=0s"}},
 		{name: "rejects a non-positive idempotency TTL", env: []string{"IDEMPOTENCY_TTL=0s"}},
+		{name: "rejects a non-positive deal cache TTL", env: []string{"DEAL_CACHE_TTL=0s"}},
 		{name: "rejects a non-positive statement timeout", env: []string{"POSTGRES_STATEMENT_TIMEOUT=0s"}},
 		{name: "rejects zero max connections", env: []string{"POSTGRES_MAX_CONNS=0"}},
 		{name: "rejects min connections above max connections", env: []string{"POSTGRES_MAX_CONNS=5", "POSTGRES_MIN_CONNS=6"}},

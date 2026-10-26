@@ -83,9 +83,12 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	gate := redisrepo.NewStockGate(rdb)
 
 	// Use cases
+	// Hot single-deal reads go through the cache; activation and confirmation
+	// read the database directly because they need current data.
+	dealCache := redisrepo.NewDealCache(rdb, dealRepo, cfg.DealCacheTTL)
 	manageDeals := usecase.NewManageDeals(dealRepo, gate, clk)
-	dealQueries := usecase.NewDealQueries(dealRepo, clk)
-	reserve := usecase.NewReserve(dealRepo, gate, resRepo, clk, ids, cfg.ReservationTTL, log)
+	dealQueries := usecase.NewDealQueries(dealCache, dealRepo, clk)
+	reserve := usecase.NewReserve(dealCache, gate, resRepo, clk, ids, cfg.ReservationTTL, log)
 	confirm := usecase.NewConfirm(dealRepo, dealRepo, resRepo, orderRepo, txm, clk, ids)
 	cancelReservation := usecase.NewCancel(dealRepo, resRepo, gate, txm, clk, log)
 

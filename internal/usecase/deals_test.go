@@ -119,7 +119,7 @@ func TestDealQueries(t *testing.T) {
 
 	t.Run("returns a deal by id", func(t *testing.T) {
 		t.Parallel()
-		uc := usecase.NewDealQueries(newFakeDeals(activeDeal(t)), &fakeClock{now: t0})
+		uc := newDealQueries(newFakeDeals(activeDeal(t)), &fakeClock{now: t0})
 
 		d, err := uc.Get(t.Context(), 7)
 
@@ -129,7 +129,7 @@ func TestDealQueries(t *testing.T) {
 
 	t.Run("returns ErrDealNotFound for an unknown id", func(t *testing.T) {
 		t.Parallel()
-		uc := usecase.NewDealQueries(newFakeDeals(), &fakeClock{now: t0})
+		uc := newDealQueries(newFakeDeals(), &fakeClock{now: t0})
 
 		_, err := uc.Get(t.Context(), 404)
 
@@ -150,7 +150,7 @@ func TestDealQueries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			deals := newFakeDeals()
-			uc := usecase.NewDealQueries(deals, &fakeClock{now: t0})
+			uc := newDealQueries(deals, &fakeClock{now: t0})
 
 			_, err := uc.ListActive(t.Context(), 0, tc.requested)
 
@@ -167,7 +167,7 @@ func TestDealQueries(t *testing.T) {
 			_, err := deals.Create(t.Context(), activeDeal(t))
 			require.NoError(t, err)
 		}
-		uc := usecase.NewDealQueries(deals, &fakeClock{now: t0})
+		uc := newDealQueries(deals, &fakeClock{now: t0})
 
 		first, err := uc.ListActive(t.Context(), 0, 2)
 		require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestDealQueries(t *testing.T) {
 
 	t.Run("rejects a negative cursor", func(t *testing.T) {
 		t.Parallel()
-		uc := usecase.NewDealQueries(newFakeDeals(), &fakeClock{now: t0})
+		uc := newDealQueries(newFakeDeals(), &fakeClock{now: t0})
 
 		_, err := uc.ListActive(t.Context(), -1, 10)
 
@@ -190,4 +190,9 @@ func TestDealQueries(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, domain.CodeValidation, de.Code)
 	})
+}
+
+// newDealQueries uses the same fake for single reads and listing.
+func newDealQueries(deals *fakeDeals, clock *fakeClock) *usecase.DealQueries {
+	return usecase.NewDealQueries(deals, deals, clock)
 }

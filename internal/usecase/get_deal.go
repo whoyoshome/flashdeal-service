@@ -23,18 +23,21 @@ type DealPage struct {
 
 // DealQueries answers read-only questions about deals.
 type DealQueries struct {
-	deals DealRepository
-	clock Clock
+	reader DealReader
+	deals  DealRepository
+	clock  Clock
 }
 
-// NewDealQueries wires the deal read operations.
-func NewDealQueries(deals DealRepository, clock Clock) *DealQueries {
-	return &DealQueries{deals: deals, clock: clock}
+// NewDealQueries wires the deal read operations. Single-deal reads go through
+// reader, which may be a cache: they are the hot read when a deal opens.
+// Listing always reads deals directly.
+func NewDealQueries(reader DealReader, deals DealRepository, clock Clock) *DealQueries {
+	return &DealQueries{reader: reader, deals: deals, clock: clock}
 }
 
 // Get returns one deal by ID.
 func (uc *DealQueries) Get(ctx context.Context, id int64) (domain.Deal, error) {
-	d, err := uc.deals.GetByID(ctx, id)
+	d, err := uc.reader.GetByID(ctx, id)
 	if err != nil {
 		return domain.Deal{}, fmt.Errorf("load deal %d: %w", id, err)
 	}

@@ -30,6 +30,10 @@ type Config struct {
 	// IdempotencyTTL is how long a reservation response is replayed for a
 	// retried Idempotency-Key.
 	IdempotencyTTL time.Duration `env:"IDEMPOTENCY_TTL" envDefault:"24h"`
+	// DealCacheTTL is how long a deal snapshot is served from Redis (1-5s by
+	// design): long enough to absorb an opening burst, short enough that the
+	// approximate stock shown to clients stays close to reality.
+	DealCacheTTL time.Duration `env:"DEAL_CACHE_TTL" envDefault:"2s"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
@@ -80,6 +84,7 @@ func (c Config) validate() error {
 		positive("REQUEST_TIMEOUT", c.RequestTimeout),
 		positive("RESERVATION_TTL", c.ReservationTTL),
 		positive("IDEMPOTENCY_TTL", c.IdempotencyTTL),
+		positive("DEAL_CACHE_TTL", c.DealCacheTTL),
 		positive("POSTGRES_CONNECT_TIMEOUT", c.Postgres.ConnectTimeout),
 		positive("POSTGRES_STATEMENT_TIMEOUT", c.Postgres.StatementTimeout),
 		positive("REDIS_DIAL_TIMEOUT", c.Redis.DialTimeout),
