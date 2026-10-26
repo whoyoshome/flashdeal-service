@@ -147,6 +147,36 @@ type ExpiryQueue interface {
 	MarkExpired(ctx context.Context, rs []domain.Reservation) error
 }
 
+// GateState is what the stock gate should hold for a deal according to
+// PostgreSQL: the units still available and the units each buyer holds.
+type GateState struct {
+	Available int
+	// Held maps a user ID to the units of their pending and confirmed
+	// reservations. Users holding nothing are absent.
+	Held map[string]int
+}
+
+// StockLedger reads, from the source of truth, the gate state a deal
+// should have.
+type StockLedger interface {
+	// GateState returns the deal's available units and per-buyer holdings,
+	// both read from one snapshot so they agree with each other. It returns
+	// domain.ErrDealNotFound when the deal does not exist.
+	GateState(ctx context.Context, dealID int64) (GateState, error)
+}
+
+// GateRepair inspects and repairs the stock gate when it has drifted from
+// PostgreSQL, for example after a release that failed.
+type GateRepair interface {
+	// Stock returns the units the gate has left for dealID. loaded is false
+	// when the deal's stock is not in the gate (never activated or expired).
+	Stock(ctx context.Context, dealID int64) (stock int, loaded bool, err error)
+	// Restore replaces the deal's stock and per-buyer holdings with want, but
+	// only if the gate still holds expected units, so a reservation taken in
+	// the meantime is never overwritten. It reports whether it applied.
+	Restore(ctx context.Context, dealID int64, expected int, want GateState) (bool, error)
+}
+
 // OrderRepository stores orders.
 type OrderRepository interface {
 	// Create persists o; it returns domain.ErrAlreadyExists when the

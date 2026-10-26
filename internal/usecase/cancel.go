@@ -59,7 +59,7 @@ func (uc *Cancel) Execute(ctx context.Context, in CancelInput) error {
 
 	// The cancellation is committed and PostgreSQL is the source of truth,
 	// so a gate failure must not fail the request: it is logged and the
-	// reconciler (phase 5) restores the gate from PostgreSQL.
+	// reconciler restores the gate from PostgreSQL.
 	gateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), compensationTimeout)
 	defer cancel()
 	if err := uc.gate.Release(gateCtx, res.DealID(), res.UserID(), res.Quantity()); err != nil {

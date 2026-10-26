@@ -15,6 +15,7 @@ import (
 
 	"github.com/whoyoshome/flashdeal-service/internal/domain"
 	"github.com/whoyoshome/flashdeal-service/internal/repository/redisrepo"
+	"github.com/whoyoshome/flashdeal-service/internal/usecase"
 )
 
 // TestStockGate_NoOversell is the most important test in the repository:
@@ -186,4 +187,8 @@ func TestStockGate_FailsClosed(t *testing.T) {
 	require.ErrorIs(t, gate.Load(t.Context(), deal), domain.ErrStockUnavailable)
 	require.ErrorIs(t, gate.TryReserve(t.Context(), deal.ID(), "u", 1, 1), domain.ErrStockUnavailable)
 	require.ErrorIs(t, gate.Release(t.Context(), deal.ID(), "u", 1), domain.ErrStockUnavailable)
+	_, _, err := gate.Stock(t.Context(), deal.ID())
+	require.ErrorIs(t, err, domain.ErrStockUnavailable)
+	_, err = gate.Restore(t.Context(), deal.ID(), 1, usecase.GateState{Available: 2})
+	require.ErrorIs(t, err, domain.ErrStockUnavailable)
 }

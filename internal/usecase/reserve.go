@@ -93,7 +93,7 @@ func (uc *Reserve) Execute(ctx context.Context, in ReserveInput) (domain.Reserva
 // compensate gives units back to the gate. It must survive the client
 // disconnecting, so it runs detached from the request's cancellation. A
 // failure is logged here because the caller is already returning another
-// outcome; the reconciler (phase 5) repairs any drift.
+// outcome; the reconciler repairs any drift.
 func (uc *Reserve) compensate(ctx context.Context, dealID int64, in ReserveInput) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), compensationTimeout)
 	defer cancel()

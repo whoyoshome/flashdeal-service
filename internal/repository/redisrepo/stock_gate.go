@@ -5,6 +5,8 @@ import (
 	_ "embed" // Lua scripts are compiled into the binary
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -13,13 +15,18 @@ import (
 	"github.com/whoyoshome/flashdeal-service/internal/usecase"
 )
 
-var _ usecase.StockGate = (*StockGate)(nil)
+var (
+	_ usecase.StockGate  = (*StockGate)(nil)
+	_ usecase.GateRepair = (*StockGate)(nil)
+)
 
 var (
 	//go:embed scripts/reserve.lua
 	reserveLua string
 	//go:embed scripts/release.lua
 	releaseLua string
+	//go:embed scripts/restore.lua
+	restoreLua string
 )
 
 // Script results with a business meaning (see the scripts' headers).
@@ -41,6 +48,7 @@ type StockGate struct {
 	rdb     *redis.Client
 	reserve *redis.Script
 	release *redis.Script
+	restore *redis.Script
 }
 
 // NewStockGate returns a gate using rdb. Scripts run via EVALSHA, falling
@@ -50,6 +58,7 @@ func NewStockGate(rdb *redis.Client) *StockGate {
 		rdb:     rdb,
 		reserve: redis.NewScript(reserveLua),
 		release: redis.NewScript(releaseLua),
+		restore: redis.NewScript(restoreLua),
 	}
 }
 
@@ -97,6 +106,35 @@ func (g *StockGate) Release(ctx context.Context, dealID int64, userID string, qt
 		return unavailable("release script", err)
 	}
 	return nil
+}
+
+// Stock returns the units the gate has left for dealID, or loaded false when
+// the deal's stock is not in Redis.
+func (g *StockGate) Stock(ctx context.Context, dealID int64) (int, bool, error) {
+	stock, err := g.rdb.Get(ctx, stockKey(dealID)).Int()
+	if errors.Is(err, redis.Nil) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, unavailable("read stock", err)
+	}
+	return stock, true, nil
+}
+
+// Restore replaces the deal's stock and buyers with want if the stock still
+// equals expected. The buyers are rewritten from scratch, so entries left at
+// zero by releases disappear.
+func (g *StockGate) Restore(ctx context.Context, dealID int64, expected int, want usecase.GateState) (bool, error) {
+	args := make([]any, 0, 2+2*len(want.Held))
+	args = append(args, expected, want.Available)
+	for _, user := range slices.Sorted(maps.Keys(want.Held)) {
+		args = append(args, user, want.Held[user])
+	}
+	applied, err := g.restore.Run(ctx, g.rdb, []string{stockKey(dealID), buyersKey(dealID)}, args...).Int()
+	if err != nil {
+		return false, unavailable("restore script", err)
+	}
+	return applied == 1, nil
 }
 
 // unavailable reports a Redis failure as ErrStockUnavailable so the service

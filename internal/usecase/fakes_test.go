@@ -27,6 +27,8 @@ var (
 	_ usecase.ReservationRepository = (*fakeReservations)(nil)
 	_ usecase.OrderRepository       = (*fakeOrders)(nil)
 	_ usecase.ExpiryQueue           = (*fakeQueue)(nil)
+	_ usecase.StockLedger           = (*fakeLedger)(nil)
+	_ usecase.GateRepair            = (*fakeRepair)(nil)
 	_ usecase.TxManager             = (*fakeTx)(nil)
 )
 
@@ -267,6 +269,65 @@ func (f *fakeQueue) MarkExpired(_ context.Context, rs []domain.Reservation) erro
 		return slices.ContainsFunc(rs, func(r domain.Reservation) bool { return r.ID() == p.ID() })
 	})
 	return nil
+}
+
+type fakeLedger struct {
+	states map[int64]usecase.GateState
+	err    error
+	calls  int
+}
+
+func (f *fakeLedger) GateState(_ context.Context, dealID int64) (usecase.GateState, error) {
+	f.calls++
+	if f.err != nil {
+		return usecase.GateState{}, f.err
+	}
+	s, ok := f.states[dealID]
+	if !ok {
+		return usecase.GateState{}, domain.ErrDealNotFound
+	}
+	return s, nil
+}
+
+type restoreCall struct {
+	dealID   int64
+	expected int
+	want     usecase.GateState
+}
+
+// fakeRepair is a gate holding one stock counter per loaded deal. Restore is
+// a real compare-and-set over that counter.
+type fakeRepair struct {
+	stock      map[int64]int
+	stockErr   error
+	restoreErr error
+	// takeBeforeRestore simulates a buyer taking a unit between the pass
+	// reading the gate and repairing it.
+	takeBeforeRestore bool
+	restores          []restoreCall
+}
+
+func (f *fakeRepair) Stock(_ context.Context, dealID int64) (int, bool, error) {
+	if f.stockErr != nil {
+		return 0, false, f.stockErr
+	}
+	s, ok := f.stock[dealID]
+	return s, ok, nil
+}
+
+func (f *fakeRepair) Restore(_ context.Context, dealID int64, expected int, want usecase.GateState) (bool, error) {
+	f.restores = append(f.restores, restoreCall{dealID: dealID, expected: expected, want: want})
+	if f.restoreErr != nil {
+		return false, f.restoreErr
+	}
+	if f.takeBeforeRestore {
+		f.stock[dealID]--
+	}
+	if f.stock[dealID] != expected {
+		return false, nil
+	}
+	f.stock[dealID] = want.Available
+	return true, nil
 }
 
 // fakeTx runs fn directly and records how many transactions were opened.

@@ -16,6 +16,7 @@ import (
 var (
 	_ usecase.DealRepository = (*DealRepo)(nil)
 	_ usecase.DealStock      = (*DealRepo)(nil)
+	_ usecase.StockLedger    = (*DealRepo)(nil)
 )
 
 const (
@@ -37,6 +38,18 @@ WHERE id = $1 AND reserved >= $2`
 
 	releaseReserved = `UPDATE deals SET reserved = reserved - $2, updated_at = now()
 WHERE id = $1 AND reserved >= $2`
+
+	// One statement, so the counters and the holdings come from the same
+	// snapshot. A deal nobody holds units of still returns one row, with a
+	// NULL user.
+	selectGateState = `SELECT d.total_stock - d.reserved - d.sold, h.user_id, h.held
+FROM deals AS d
+LEFT JOIN LATERAL (
+  SELECT user_id, sum(quantity)::int AS held FROM reservations
+  WHERE deal_id = d.id AND status IN ('pending', 'confirmed')
+  GROUP BY user_id
+) AS h ON true
+WHERE d.id = $1`
 )
 
 // DealRepo persists deals and moves their stock counters.
@@ -130,4 +143,37 @@ func (r *DealRepo) moveStock(ctx context.Context, sql, op string, dealID int64, 
 			domain.ErrCorruptState, op, dealID, qty)
 	}
 	return nil
+}
+
+// GateState returns the units the deal has available and those each buyer
+// holds through pending or confirmed reservations.
+func (r *DealRepo) GateState(ctx context.Context, dealID int64) (usecase.GateState, error) {
+	rows, err := db(ctx, r.pool).Query(ctx, selectGateState, dealID)
+	if err != nil {
+		return usecase.GateState{}, fmt.Errorf("query gate state of deal %d: %w", dealID, err)
+	}
+	defer rows.Close()
+
+	state := usecase.GateState{Held: map[string]int{}}
+	found := false
+	for rows.Next() {
+		var (
+			user *string
+			held *int
+		)
+		if err := rows.Scan(&state.Available, &user, &held); err != nil {
+			return usecase.GateState{}, fmt.Errorf("scan gate state: %w", err)
+		}
+		found = true
+		if user != nil && held != nil {
+			state.Held[*user] = *held
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return usecase.GateState{}, fmt.Errorf("iterate gate state of deal %d: %w", dealID, err)
+	}
+	if !found {
+		return usecase.GateState{}, domain.ErrDealNotFound
+	}
+	return state, nil
 }
