@@ -78,6 +78,7 @@ linters:
             - github.com/whoyoshome/flashdeal-service/internal/usecase
             - github.com/whoyoshome/flashdeal-service/internal/platform
             - github.com/jackc/pgx/v5
+            - golang.org/x/sync
 
         redisrepo:
           list-mode: strict
@@ -88,6 +89,7 @@ linters:
             - github.com/whoyoshome/flashdeal-service/internal/usecase
             - github.com/whoyoshome/flashdeal-service/internal/platform
             - github.com/redis/go-redis/v9
+            - golang.org/x/sync
 
         worker:
           list-mode: strict

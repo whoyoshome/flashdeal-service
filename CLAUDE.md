@@ -40,8 +40,8 @@ Dependencies point **inward**: `delivery → usecase → domain`. Adapters in `r
 | `internal/domain` | stdlib only | `pgx`, `redis`, `net/http`, `encoding/json`, any other `internal/*` |
 | `internal/usecase` | `domain`, stdlib, `golang.org/x/sync` | `delivery`, `repository`, `pgx`, `redis`, `net/http` |
 | `internal/delivery/httpapi` | `usecase`, `domain`, `chi`, `platform` | `repository`, `pgx`, `redis` |
-| `internal/repository/postgres` | `domain`, `usecase` (ports), `pgx`, `platform` | `delivery`, `redis` |
-| `internal/repository/redisrepo` | `domain`, `usecase` (ports), `go-redis`, `platform` | `delivery`, `pgx` |
+| `internal/repository/postgres` | `domain`, `usecase` (ports), `pgx`, `platform`, `golang.org/x/sync` | `delivery`, `redis` |
+| `internal/repository/redisrepo` | `domain`, `usecase` (ports), `go-redis`, `platform`, `golang.org/x/sync` | `delivery`, `pgx` |
 | `internal/worker` | `usecase`, `domain`, `platform` | `delivery`, `repository` |
 | `internal/platform` | stdlib, infra libs | `usecase`, `delivery`, `repository` |
 | `cmd/api` | everything | — (composition root only, no business logic) |
