@@ -83,8 +83,8 @@ test/                   e2e, chaos and k6 load tests with their results
 
 ## Demo
 
-- **App:** _pending deploy — paste the public HTTPS URL here_
-- **API:** _same host_ `/healthz`
+- **App:** https://flashdeal-service.onrender.com/
+- **API:** https://flashdeal-service.onrender.com/healthz
 
 The first request can take 30–60 seconds if the free host has spun down;
 retry if a click fails once.
