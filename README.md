@@ -57,7 +57,9 @@ A reservation goes through three steps:
    back to the gate.
 
 The reservation holds its units for 5 minutes. Confirming it creates the
-order. If it is not confirmed in time, the expirer returns the units.
+order and, in the same statement, an `order.confirmed` event that a relay
+publishes to a Redis Stream. If it is not confirmed in time, the expirer
+returns the units.
 
 The code follows a strict inward dependency rule,
 `delivery → usecase → domain`, enforced by `depguard`. Adapters in
@@ -286,6 +288,7 @@ obvious has an architecture decision record:
 | [0009](docs/adr/0009-per-user-rate-limiting.md) | Per-subject Redis token bucket on authenticated routes |
 | [0010](docs/adr/0010-oidc-jwks-verification.md) | Optional RS256 verification against an OIDC JWKS URL |
 | [0011](docs/adr/0011-stock-shards.md) | Split each deal's stock over shard rows taken with `SKIP LOCKED` |
+| [0012](docs/adr/0012-transactional-outbox.md) | Publish `order.confirmed` to a Redis Stream through a transactional outbox |
 
 ## Technical overview
 
@@ -352,6 +355,9 @@ its default. The ones that shape behavior:
 | `EXPIRE_EVERY`, `EXPIRE_BATCH_SIZE` | `5s`, `100` | Expirer pace and batch |
 | `RECONCILE_EVERY` | `30s` | Reconciler pace; must exceed `REQUEST_TIMEOUT` by more than 5 s |
 | `STOCK_SAMPLE_EVERY` | `5s` | How often `stock_remaining` is published |
+| `STOCK_SHARDS` | `8` | Rows a new deal's stock is split over ([ADR 0011](docs/adr/0011-stock-shards.md)) |
+| `OUTBOX_EVERY`, `OUTBOX_BATCH_SIZE` | `1s`, `100` | Outbox relay pace and batch |
+| `OUTBOX_STREAM`, `OUTBOX_STREAM_MAXLEN` | `flashdeal:events`, `100000` | Redis Stream for `order.confirmed` and its approximate length cap |
 | `TRACING_OTLP_ENDPOINT`, `TRACING_SAMPLE_RATIO` | empty, `1` | OTLP/HTTP collector (empty disables tracing) and share of traces kept |
 | `ADMIN_ADDR` | `:6060` | pprof listener; never expose it |
 
@@ -369,6 +375,12 @@ on `SIGTERM`. Every replica runs them, with no leader election.
   ([ADR 0005](docs/adr/0005-stock-gate-reconciliation.md)).
 - **Stock sampler.** It publishes the units left in the gate per active deal
   as `stock_remaining{deal_id}`.
+- **Outbox relay.** It publishes `order.confirmed` events to the Redis
+  Stream `flashdeal:events`. Each event is recorded in the same SQL
+  statement as its order. The relay claims batches with
+  `FOR UPDATE SKIP LOCKED`, appends them, and deletes them in the same
+  transaction. Delivery is at least once, so consumers drop duplicates by
+  `event_id` ([ADR 0012](docs/adr/0012-transactional-outbox.md)).
 
 ### Observability
 
@@ -464,6 +476,10 @@ Limitations, all documented where they are decided:
   ([ADR 0008](docs/adr/0008-jwt-authentication.md),
   [ADR 0010](docs/adr/0010-oidc-jwks-verification.md)).
 - **Payments are simulated.** Confirmation assumes the payment succeeded.
+- **Events are delivered at least once, through Redis.** Consumers must
+  drop duplicates by `event_id`. The stream keeps about 100,000 entries,
+  and it survives a Redis restart only with Redis persistence enabled
+  ([ADR 0012](docs/adr/0012-transactional-outbox.md)).
 - **Replicas are measured.** Single-replica numbers are in the load
   results above. A kind cluster with **2 API pods** behind one Service
   also sold out 1 000 units with zero oversell
@@ -472,8 +488,7 @@ Limitations, all documented where they are decided:
 
 Next steps:
 
-1. **A transactional outbox** to publish `order.confirmed` events.
-2. **Scenario A on real hardware.** Measure 10,000 units at 5,000 rps on
+1. **Scenario A on real hardware.** Measure 10,000 units at 5,000 rps on
    dedicated nodes with an in-cluster load generator, not through
    `kubectl port-forward`.
 

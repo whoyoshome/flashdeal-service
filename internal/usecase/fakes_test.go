@@ -30,6 +30,8 @@ var (
 	_ usecase.StockLedger           = (*fakeLedger)(nil)
 	_ usecase.GateRepair            = (*fakeRepair)(nil)
 	_ usecase.TxManager             = (*fakeTx)(nil)
+	_ usecase.OutboxQueue           = (*fakeOutbox)(nil)
+	_ usecase.EventPublisher        = (*fakePublisher)(nil)
 )
 
 // t0 is the fixed "now" of every test.
@@ -334,6 +336,45 @@ func (f *fakeRepair) Restore(_ context.Context, dealID int64, expected int, want
 	}
 	f.stock[dealID] = want.Available
 	return true, nil
+}
+
+// fakeOutbox holds recorded events in memory, oldest first.
+type fakeOutbox struct {
+	events    []usecase.OutboxEvent
+	lockErr   error
+	removeErr error
+	lockCalls []int
+	removed   []int64
+}
+
+func (f *fakeOutbox) LockPending(_ context.Context, limit int) ([]usecase.OutboxEvent, error) {
+	f.lockCalls = append(f.lockCalls, limit)
+	if f.lockErr != nil {
+		return nil, f.lockErr
+	}
+	return slices.Clone(f.events[:min(limit, len(f.events))]), nil
+}
+
+func (f *fakeOutbox) Remove(_ context.Context, ids []int64) error {
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+	f.removed = append(f.removed, ids...)
+	f.events = slices.DeleteFunc(f.events, func(e usecase.OutboxEvent) bool { return slices.Contains(ids, e.ID) })
+	return nil
+}
+
+type fakePublisher struct {
+	err       error
+	published []usecase.OutboxEvent
+}
+
+func (f *fakePublisher) Publish(_ context.Context, events []usecase.OutboxEvent) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.published = append(f.published, events...)
+	return nil
 }
 
 // fakeTx runs fn directly and records how many transactions were opened.

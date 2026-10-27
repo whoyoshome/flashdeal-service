@@ -262,7 +262,7 @@ La regla en Go: **las interfaces se declaran donde se consumen** (en `usecase`),
 6. Si el paso 5 falla, **UseCase** compensa con `StockGate.Release` usando `context.WithoutCancel` (la compensación no debe morir porque el cliente cerró la conexión).
 7. **Delivery** mapea el resultado: `201` con el DTO de la reserva, o el error de dominio a su código HTTP (sección 5).
 
-La confirmación (`POST /v1/reservations/{id}/confirm`) solo toca PostgreSQL: en una transacción bloquea la reserva (`SELECT ... FOR UPDATE`), verifica que siga `pending` y no expirada, la marca `confirmed`, mueve la unidad de `reserved` a `sold` en el shard de la reserva e inserta la `order`.
+La confirmación (`POST /v1/reservations/{id}/confirm`) solo toca PostgreSQL: en una transacción bloquea la reserva (`SELECT ... FOR UPDATE`), verifica que siga `pending` y no expirada, la marca `confirmed`, mueve la unidad de `reserved` a `sold` en el shard de la reserva e inserta la `order` junto con su evento `order.confirmed` en la tabla `outbox`, en la misma sentencia. Un worker (relay) en cada réplica toma los eventos con `FOR UPDATE SKIP LOCKED`, los publica en el Redis Stream `flashdeal:events` y los borra en la misma transacción: entrega al menos una vez, y los consumidores descartan duplicados por `event_id` (ADR 0012).
 
 ### Por qué Redis primero y PostgreSQL después
 
@@ -837,7 +837,7 @@ Cómo pedírselo a Claude Code: "Lee `docs/ARCHITECTURE.md` y `CLAUDE.md`. Imple
    - Sección "How I Used AI": qué delegaste a Claude Code, qué revisaste y qué corregiste.
    - Listo cuando: alguien que no te conoce clona el repo y ve la demo funcionando en menos de 5 minutos.
 
-Extensiones opcionales si sobra tiempo, en orden de valor: patrón Outbox para publicar `order.confirmed`, rate limiting por usuario con token bucket en Redis, despliegue en Kubernetes con HPA.
+Extensiones opcionales si sobra tiempo, en orden de valor: patrón Outbox para publicar `order.confirmed` (hecho: ADR 0012), rate limiting por usuario con token bucket en Redis, despliegue en Kubernetes con HPA.
 
 ## Anexo. Contrato de API, modelo de datos y criterios de aceptación
 
@@ -923,6 +923,15 @@ CREATE TABLE orders (
   currency       CHAR(3)     NOT NULL,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ADR 0012: eventos aún no publicados; el relay los borra al publicarlos.
+CREATE TABLE outbox (
+  id           BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  event_type   TEXT        NOT NULL,
+  aggregate_id TEXT        NOT NULL,
+  payload      JSONB       NOT NULL,
+  occurred_at  TIMESTAMPTZ NOT NULL
+);
 ```
 
 El repositorio traduce las violaciones por nombre de constraint, no solo por código SQLSTATE: `deal_stock_shards_not_exceeded` → `ErrSoldOut`, `reservations_idempotent` → devolver la reserva existente.
@@ -935,6 +944,7 @@ Claves de Redis:
 | `deal:{id}:buyers` | Hash | `user_id` → unidades reservadas | Igual que el stock |
 | `deal:{id}:cache` | String (JSON) | Snapshot de la oferta para lecturas | 1 a 5 s |
 | `idem:{user_id}:{key}` | String (JSON) | Respuesta original de la request | 24 h |
+| `flashdeal:events` | Stream | Eventos `order.confirmed` publicados por el relay del outbox | Sin TTL; recortado a unas `OUTBOX_STREAM_MAXLEN` entradas |
 
 ### Criterios de aceptación globales
 

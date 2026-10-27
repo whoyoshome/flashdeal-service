@@ -159,6 +159,8 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	expire := usecase.NewExpire(resRepo, dealRepo, gate, txm, clk, cfg.ExpireBatchSize, log)
 	reconcile := usecase.NewReconcile(dealRepo, dealRepo, gate, clk)
 	stockLevels := usecase.NewStockLevels(dealRepo, gate, clk)
+	relayOutbox := usecase.NewRelayOutbox(postgres.NewOutboxRepo(pool),
+		redisrepo.NewEventPublisher(rdb, cfg.Outbox.Stream, cfg.Outbox.StreamMaxLen), txm, cfg.Outbox.BatchSize)
 
 	var limiter middleware.RateLimiter
 	if cfg.RateLimitRPS > 0 {
@@ -218,6 +220,9 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	})
 	g.Go(func() error {
 		return worker.NewStockSampler(stockLevels, metrics, cfg.StockSampleEvery, tracing, log).Run(gctx)
+	})
+	g.Go(func() error {
+		return worker.NewOutboxRelay(relayOutbox, cfg.Outbox.Every, metrics, tracing, log).Run(gctx)
 	})
 	g.Go(func() error {
 		<-gctx.Done()

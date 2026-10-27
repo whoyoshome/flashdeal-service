@@ -28,6 +28,7 @@ type Metrics struct {
 	reservations *prometheus.CounterVec
 	expired      prometheus.Counter
 	repairs      prometheus.Counter
+	published    prometheus.Counter
 	stock        *prometheus.GaugeVec
 }
 
@@ -57,6 +58,10 @@ func NewMetrics() *Metrics {
 			Name: "stock_gate_repairs_total",
 			Help: "Deals whose Redis stock gate was corrected from PostgreSQL after a lost update.",
 		}),
+		published: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "outbox_events_published_total",
+			Help: "Outbox events published to the event stream and removed from the outbox.",
+		}),
 		stock: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "stock_remaining",
 			Help: "Units left in the Redis stock gate, per active deal, as last sampled by this replica.",
@@ -65,7 +70,7 @@ func NewMetrics() *Metrics {
 	m.registry.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		m.httpRequests, m.httpDuration, m.reservations, m.expired, m.repairs, m.stock,
+		m.httpRequests, m.httpDuration, m.reservations, m.expired, m.repairs, m.published, m.stock,
 	)
 	for _, result := range reservationResults {
 		m.reservations.WithLabelValues(result)
@@ -107,6 +112,11 @@ func (m *Metrics) ReservationsExpired(n int) {
 // StockGateRepaired counts deals whose gate the reconciler corrected.
 func (m *Metrics) StockGateRepaired(n int) {
 	m.repairs.Add(float64(n))
+}
+
+// EventsPublished counts outbox events the relay published.
+func (m *Metrics) EventsPublished(n int) {
+	m.published.Add(float64(n))
 }
 
 // SetStockLevels replaces the stock_remaining series with levels, keyed by
