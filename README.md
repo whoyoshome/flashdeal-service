@@ -243,9 +243,11 @@ second keep arriving ([details](test/load/results/chaos.md)):
 
 ### On the dashboard
 
+![Grafana flash-sale dashboard during scenario B: gate stock falls to 0, sold-out share 98.2 %, 1,000 reservations created, 0 timeouts](docs/images/grafana-flash-sale.png)
+
 A k6 run on the Grafana dashboard shows a deal's gate stock falling to 0 in
 under a second. The `SOLD_OUT` rate climbs to the offered 5,000 requests per
-second and is 98.1 % of attempts. The PostgreSQL pool is pinned at 20 of 20
+second (about 98 % of attempts). The PostgreSQL pool is pinned at 20 of 20
 while the units are written
 ([details](test/load/results/observability.md)).
 
@@ -439,9 +441,9 @@ Limitations, all documented where they are decided:
 - **Redis restart without its data.** The service fails closed until the
   deals are activated again. Activation is idempotent; the reconciler does
   not reload the gate on its own.
-- **JWT is HS256 with a shared secret.** Fine for a self-contained demo;
-  production would verify tokens from an OIDC IdP (JWKS / RS256) behind the
-  same `platform/auth` boundary
+- **JWT is HS256 with a shared secret.** Fine for local Compose, tests and
+  load runs; production would verify tokens from an OIDC IdP (JWKS / RS256)
+  behind the same `platform/auth` boundary
   ([ADR 0008](docs/adr/0008-jwt-authentication.md)).
 - **Payments are simulated.** Confirmation assumes the payment succeeded.
 - **One replica measured.** Load was measured on one replica on a shared
@@ -529,6 +531,13 @@ The lesson I take from it: an agent is fast at writing code, so the leverage
 is in the guardrails around it. That means written rules, small reviewed
 steps, CI, and tests and load runs that measure the claims instead of
 trusting them.
+
+## Contributing and security
+
+- How to run the stack, open a PR and keep the layer rules:
+  [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- How to report a vulnerability (private advisory, no public issues):
+  [`SECURITY.md`](SECURITY.md).
 
 ## License
 
