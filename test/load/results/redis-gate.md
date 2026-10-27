@@ -67,6 +67,11 @@ evaluate with pprof and these same scenarios:
   reservation gives its unit back while other buyers can still use it.
 - **Fewer round trips per sale**: insert and stock update in one statement.
 
+Phase 7 profiled it: the deal row stayed locked while each `COMMIT` waited for
+its WAL fsync. Committing reservation transactions asynchronously raised
+the write rate from about 480 to about 2,000 units per second; see
+[write-path.md](write-path.md) and ADR 0006.
+
 ## Correctness in every run
 
 Zero oversell in all five runs. After each one, PostgreSQL's `reserved`

@@ -15,7 +15,10 @@ It answers two questions:
 2. **Latency**: how long do successful reservations and sold-out rejections
    take? They are recorded as separate trends (`reserve_ok_duration`,
    `reserve_sold_out_duration`), because the architecture targets them
-   separately (p99 < 50 ms and p99 < 10 ms).
+   separately. The run fails when a target is missed: successful
+   reservation p99 < 50 ms, sold-out rejection p99 < 10 ms, and fewer than
+   1 % of responses with a 5xx status (`server_errors`). The targets are not
+   relaxed to make a run pass; see the phase 7 results for where they hold.
 
 ## Running it
 
@@ -56,3 +59,4 @@ For example, a gentle run: `STOCK=1000 PEAK_RPS=1000 RAMP=10s HOLD=30s make load
 - [Phase 3 baseline: PostgreSQL only](results/baseline-postgres.md)
 - [Phase 4: Redis gate and deal cache vs baseline](results/redis-gate.md)
 - [Phase 6: a flash sale on the Grafana dashboard](results/observability.md)
+- [Phase 7: the reservation write path, profiled and fixed](results/write-path.md)

@@ -77,10 +77,12 @@ uses the body `{"code", "message", "request_id"}`.
   where JWT validation will go.
 - Unconfirmed reservations expire after `RESERVATION_TTL` (5 min); the
   expirer returns their units within `EXPIRE_EVERY`.
-- Sold-out rejections are served from Redis in milliseconds, but successful
-  reservations still serialize on one `deals` row (about 400 to 450 per second
-  locally). See [phase 4 results](test/load/results/redis-gate.md); this is
-  the bottleneck carried to phase 7.
+- Successful reservations of one deal still serialize on its `deals` row:
+  about 2,000 per second locally, after reservation transactions moved to
+  asynchronous commit ([ADR 0006](docs/adr/0006-asynchronous-commit-for-reservations.md);
+  [results](test/load/results/write-path.md)). A PostgreSQL crash can lose
+  the last few hundred milliseconds of reservations, never orders and never
+  into an oversell.
 
 ## Make targets
 
