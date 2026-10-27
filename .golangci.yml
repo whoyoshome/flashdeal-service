@@ -3,10 +3,11 @@ version: "2"
 run:
   timeout: 5m
   tests: true
-  # Lint integration and e2e tests too; they are excluded from plain builds.
+  # Lint integration, e2e and chaos tests too; they are excluded from plain builds.
   build-tags:
     - integration
     - e2e
+    - chaos
 
 linters:
   default: standard # errcheck, govet, ineffassign, staticcheck, unused

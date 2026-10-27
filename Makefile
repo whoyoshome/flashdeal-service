@@ -15,7 +15,7 @@ LOAD_SUMMARY  ?= test/load/results/latest.json
 # run only the API and its stores.
 PROFILES      ?= --profile observability
 
-.PHONY: check up down migrate test test-integration test-e2e lint lint-api load build tidy
+.PHONY: check up down migrate test test-integration test-e2e test-chaos lint lint-api load build tidy
 
 ## check: lint and unit tests (required before declaring a task done)
 check: lint test
@@ -46,6 +46,10 @@ test-integration:
 ## test-e2e: end-to-end tests over HTTP against the running stack (make up + make migrate first)
 test-e2e:
 	$(GO) test -count=1 -tags=e2e ./test/e2e/...
+
+## test-chaos: stop Redis and the API under load and check the service degrades safely (make up + make migrate first)
+test-chaos:
+	$(GO) test -count=1 -v -timeout=10m -tags=chaos ./test/chaos/...
 
 ## lint: static analysis, layer rules (depguard) and known vulnerabilities
 lint:
