@@ -43,6 +43,7 @@ curated results are committed as Markdown in [`results/`](results).
 | `RAMP`     | `2s`              | Time to reach the peak       |
 | `HOLD`     | `20s`             | Time held at the peak        |
 | `BASE_URL` | `http://api:8080` | API address inside Compose   |
+| `THRESHOLDS` | `all`           | `correctness` drops the latency and 5xx targets (`make demo` uses it) |
 
 For example, a gentle run: `STOCK=1000 PEAK_RPS=1000 RAMP=10s HOLD=30s make load`.
 

@@ -4,6 +4,11 @@
 COMPOSE ?= docker compose
 GO      ?= go
 
+# Git Bash on Windows rewrites arguments that look like POSIX paths (the
+# /spec and /load mount points below) into Windows paths. Elsewhere it is
+# ignored.
+export MSYS_NO_PATHCONV := 1
+
 .DEFAULT_GOAL := check
 
 REDOCLY_IMAGE ?= redocly/cli:2.71.1
@@ -15,10 +20,22 @@ LOAD_SUMMARY  ?= test/load/results/latest.json
 # run only the API and its stores.
 PROFILES      ?= --profile observability
 
-.PHONY: check up down migrate test test-integration test-e2e test-chaos lint lint-api load build tidy
+.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api load build tidy
 
 ## check: lint and unit tests (required before declaring a task done)
 check: lint test
+
+## demo: start everything, run a short flash sale and print where to watch it
+demo: up migrate
+	docker run --rm --network $(K6_NETWORK) -v "$(CURDIR)/test/load:/load" \
+		-e STOCK=1000 -e PEAK_RPS=2000 -e RAMP=2s -e HOLD=10s -e THRESHOLDS=correctness \
+		$(K6_IMAGE) run /load/flash_sale.js
+# Plain echo text, no quotes or shell metacharacters: make may run recipes
+# with sh or with cmd.exe, which would print quotes literally.
+	@echo A deal of 1000 units just sold out to about 20000 buyers, none oversold.
+	@echo Dashboard: http://localhost:3000 - FlashDeal dashboard, last 5 minutes
+	@echo Traces:    http://localhost:16686 - service flashdeal-api
+	@echo Run it again with make demo, stop everything with make down.
 
 ## up: start the local stack (API, stores, Jaeger, Prometheus, Grafana) and wait until healthy
 up:
@@ -63,7 +80,7 @@ lint-api:
 ## load: k6 flash-sale scenario against the running stack (make up + make migrate first)
 load:
 	docker run --rm --network $(K6_NETWORK) -v "$(CURDIR)/test/load:/load" \
-		-e STOCK -e PEAK_RPS -e RAMP -e HOLD -e BASE_URL \
+		-e STOCK -e PEAK_RPS -e RAMP -e HOLD -e BASE_URL -e THRESHOLDS \
 		$(K6_IMAGE) run --summary-export=/load/results/$(notdir $(LOAD_SUMMARY)) /load/flash_sale.js
 
 ## build: compile the API binary into bin/

@@ -19,6 +19,17 @@ window with **zero overselling** under heavy load.
 
 ## Quick start
 
+One command starts everything and runs a short flash sale against it: a deal
+of 1,000 units sold to about 20,000 buyers, then the links to watch it.
+
+```bash
+make demo
+```
+
+Then open the FlashDeal dashboard in Grafana at <http://localhost:3000>.
+`make demo` can be run again, and `make down` stops everything. Step by
+step:
+
 ```bash
 make up
 make migrate
@@ -220,6 +231,7 @@ uses the body `{"code", "message", "request_id"}`.
 
 | Target                  | What it does                                            |
 | ----------------------- | ------------------------------------------------------- |
+| `make demo`             | Start everything and run a short flash sale to watch    |
 | `make up` / `make down` | Start / stop the local stack                            |
 | `make migrate`          | Apply database migrations (golang-migrate container)    |
 | `make test`             | Unit tests with the race detector                       |

@@ -20,6 +20,7 @@ High-concurrency flash-sale API in Go. Sells a limited stock during a short wind
 - `make lint` — `golangci-lint run` + `govulncheck ./...`
 - `make lint-api` — validate `api/openapi.yaml` with Redocly (Docker); run it whenever the contract changes
 - `make load` — k6 scenario in `test/load`
+- `make demo` — `make up` + `make migrate` + a short k6 flash sale (correctness thresholds only) for a first look
 - Before declaring any task done: `make lint test` must pass.
 
 ## Workflow

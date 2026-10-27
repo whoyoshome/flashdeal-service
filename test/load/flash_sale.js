@@ -8,6 +8,9 @@
 //   PEAK_RPS   peak attempts/second   (default 5000)
 //   RAMP       time to reach the peak (default 2s)
 //   HOLD       time held at the peak  (default 20s)
+//   THRESHOLDS all (default) or correctness: the demo keeps only the
+//              correctness thresholds, since the latency targets are not met
+//              on a laptop (see test/load/results/write-path.md)
 //
 // The defaults model an opening burst: the peak arrives in seconds and the
 // stock sells out under contention, not during a gentle ramp. Iterations k6
@@ -22,6 +25,7 @@ const STOCK = Number(__ENV.STOCK || 10000);
 const PEAK_RPS = Number(__ENV.PEAK_RPS || 5000);
 const RAMP = __ENV.RAMP || '2s';
 const HOLD = __ENV.HOLD || '20s';
+const LATENCY_THRESHOLDS = (__ENV.THRESHOLDS || 'all') !== 'correctness';
 
 // 201 (reserved) and 409 (sold out) are both correct answers under load;
 // only other statuses count as failed requests.
@@ -58,9 +62,11 @@ export const options = {
     unexpected_responses: ['rate==0'],
     // The non-functional targets in docs/ARCHITECTURE.md. A run that misses
     // them fails, so a regression cannot pass silently.
-    reserve_ok_duration: ['p(99)<50'],
-    reserve_sold_out_duration: ['p(99)<10'],
-    server_errors: ['rate<0.01'],
+    ...(LATENCY_THRESHOLDS && {
+      reserve_ok_duration: ['p(99)<50'],
+      reserve_sold_out_duration: ['p(99)<10'],
+      server_errors: ['rate<0.01'],
+    }),
   },
   summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'],
 };
