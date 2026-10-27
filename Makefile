@@ -27,7 +27,7 @@ JWT_ISSUER ?= flashdeal
 TOKEN_SUB  ?= alice
 TOKEN_ROLE ?= user
 
-.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api lint-k8s load build tidy token
+.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api lint-k8s load load-k8s build tidy token
 
 ## check: lint and unit tests (required before declaring a task done)
 check: lint test
@@ -96,6 +96,16 @@ load:
 		-e STOCK -e PEAK_RPS -e RAMP -e HOLD -e BASE_URL -e THRESHOLDS \
 		-e JWT_SECRET=$(JWT_SECRET) -e JWT_ISSUER=$(JWT_ISSUER) \
 		$(K6_IMAGE) run --summary-export=/load/results/$(notdir $(LOAD_SUMMARY)) /load/flash_sale.js
+
+## load-k8s: same scenario against a kind Service port-forwarded on localhost:18080
+## (run deploy/k8s/smoke/run.sh first, keep kubectl port-forward svc/flashdeal-api 18080:8080)
+load-k8s:
+	docker run --rm --add-host=host.docker.internal:host-gateway \
+		-v "$(CURDIR)/test/load:/load" \
+		-e BASE_URL=http://host.docker.internal:18080 \
+		-e STOCK -e PEAK_RPS -e RAMP -e HOLD -e THRESHOLDS \
+		-e JWT_SECRET=$(JWT_SECRET) -e JWT_ISSUER=$(JWT_ISSUER) \
+		$(K6_IMAGE) run --summary-export=/load/results/multi-replica.json /load/flash_sale.js
 
 ## token: mint a local JWT (TOKEN_SUB=alice TOKEN_ROLE=admin make token)
 token:
