@@ -50,7 +50,7 @@ services:
       # Matches Prometheus' 1s scrape (deploy/prometheus.yml).
       STOCK_SAMPLE_EVERY: 1s
       # Overridable to compare against a single row (ADR 0011).
-      STOCK_SHARDS: ${STOCK_SHARDS:-8}
+      STOCK_SHARDS: ${STOCK_SHARDS:-32}
       # Open the whole pool at startup so the first burst does not pay for
       # connection setup (ADR 0011).
       POSTGRES_MAX_CONNS: "20"

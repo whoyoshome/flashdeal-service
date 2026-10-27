@@ -45,7 +45,7 @@ func TestLoad(t *testing.T) {
 		require.Equal(t, 5*time.Second, cfg.StockSampleEvery)
 		require.InDelta(t, 50.0, cfg.RateLimitRPS, 0)
 		require.Equal(t, 100, cfg.RateLimitBurst)
-		require.Equal(t, 8, cfg.StockShards)
+		require.Equal(t, 32, cfg.StockShards)
 		require.Equal(t, config.Outbox{
 			Every: time.Second, BatchSize: 100, Stream: "flashdeal:events", StreamMaxLen: 100000,
 		}, cfg.Outbox)

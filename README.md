@@ -222,7 +222,7 @@ written instead of being relaxed to pass.
 | ---------------------------------------------- | ---------------------------------------------------------- |
 | 0 units oversold under any load                | ✅ every load and chaos run                                |
 | Sold-out rejection p99 < 10 ms                 | ✅ 7.8 ms in scenario B · ❌ 562 ms in A, with the CPUs saturated |
-| Successful reservation p99 < 50 ms             | ✅ 7–11 ms in B with 8 stock shards, 15–17 ms with 2 replicas · ⚠️ 44–51 ms on the first burst after a restart · ❌ 519–659 ms in A, pool and CPU bound |
+| Successful reservation p99 < 50 ms             | ✅ 7–11 ms in B with 8 stock shards, 15–17 ms with 2 replicas · ⚠️ 44–51 ms on the first burst after a restart · ❌ 111–181 ms in A with 32 shards (519–659 ms with 8): 10,000 sales in about 3 s on 4 shared CPUs |
 | Redis down: fail closed with `503`             | ✅ 2,500 of 2,500 reservations refused, slowest in 12 ms, none sold |
 | Graceful shutdown without losing requests      | ✅ `SIGTERM` under load: exit code 0, every sale answered  |
 
@@ -269,6 +269,7 @@ while the units are written
 - [Multi-replica on kind (2 pods): zero oversell](test/load/results/multi-replica.md)
 - [Stock shards: 1 vs 8 rows, 1 vs 2 replicas](test/load/results/stock-shards.md)
 - [k6 inside the cluster: scenario A on 2 replicas, still pool-bound](test/load/results/k8s-in-cluster.md)
+- [Scenario A profiled: row-lock waits, and 32 shards](test/load/results/pg-profile.md)
 
 ## Design decisions
 
@@ -356,7 +357,7 @@ its default. The ones that shape behavior:
 | `EXPIRE_EVERY`, `EXPIRE_BATCH_SIZE` | `5s`, `100` | Expirer pace and batch |
 | `RECONCILE_EVERY` | `30s` | Reconciler pace; must exceed `REQUEST_TIMEOUT` by more than 5 s |
 | `STOCK_SAMPLE_EVERY` | `5s` | How often `stock_remaining` is published |
-| `STOCK_SHARDS` | `8` | Rows a new deal's stock is split over ([ADR 0011](docs/adr/0011-stock-shards.md)) |
+| `STOCK_SHARDS` | `32` | Rows a new deal's stock is split over ([ADR 0011](docs/adr/0011-stock-shards.md)) |
 | `OUTBOX_EVERY`, `OUTBOX_BATCH_SIZE` | `1s`, `100` | Outbox relay pace and batch |
 | `OUTBOX_STREAM`, `OUTBOX_STREAM_MAXLEN` | `flashdeal:events`, `100000` | Redis Stream for `order.confirmed` and its approximate length cap |
 | `TRACING_OTLP_ENDPOINT`, `TRACING_SAMPLE_RATIO` | empty, `1` | OTLP/HTTP collector (empty disables tracing) and share of traces kept |
@@ -455,9 +456,10 @@ Limitations, all documented where they are decided:
 - **Reservation latency target met only for scenario B.** With 8 stock
   shards and a warm API, scenario B's p99 is 7–11 ms (15–17 ms on 2
   replicas). The first burst after a restart measured 44–51 ms. Scenario A
-  (10,000 units at 5,000 rps) stays at 519–659 ms, limited by the
-  20-connection pool and 4 shared CPUs
-  ([stock-shards.md](test/load/results/stock-shards.md)).
+  (10,000 units at 5,000 rps) misses the target: 111–181 ms with 32 shards,
+  the default now, against 258–659 ms with 8. Its 10,000 sales land in
+  about 3 seconds on 4 CPUs shared with k6
+  ([pg-profile.md](test/load/results/pg-profile.md)).
 - **Shard fragmentation.** Near the end of a sale, a multi-unit request can
   get `SOLD_OUT` while single units remain on different shards
   ([ADR 0011](docs/adr/0011-stock-shards.md)).
@@ -489,12 +491,13 @@ Limitations, all documented where they are decided:
 
 Next steps:
 
-1. **Scenario A on dedicated hardware.** The in-cluster k6 Job
-   (`make load-k8s-job`) is ready. On the shared 4-CPU VM, scenario A
-   waits on the database pool at 219–631 ms p99
-   ([k8s-in-cluster.md](test/load/results/k8s-in-cluster.md)). The next
-   run belongs on nodes of their own, with `pg_stat_activity` sampled to
-   find PostgreSQL's limit.
+1. **Fewer round trips per reservation.** Each reservation holds a pool
+   connection for five round trips, and scenario A's burst queues on them
+   ([pg-profile.md](test/load/results/pg-profile.md)).
+2. **Scenario A on dedicated hardware.** The in-cluster k6 Job
+   (`make load-k8s-job`) and the PostgreSQL profiler
+   (`test/load/pg_profile.sh`) are ready for nodes that are not shared
+   with the load generator.
 
 ## How I Used AI
 

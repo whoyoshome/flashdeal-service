@@ -64,8 +64,10 @@ type Config struct {
 	RateLimitBurst int `env:"RATE_LIMIT_BURST" envDefault:"100"`
 	// StockShards is how many PostgreSQL rows a new deal's stock is split
 	// over, so concurrent reservations do not queue on one row lock. A deal
-	// never gets more shards than units. Existing deals keep theirs.
-	StockShards int `env:"STOCK_SHARDS" envDefault:"8"`
+	// never gets more shards than units. Existing deals keep theirs. Keep it
+	// above POSTGRES_MAX_CONNS, so SKIP LOCKED usually finds a free shard
+	// instead of waiting for one.
+	StockShards int `env:"STOCK_SHARDS" envDefault:"32"`
 	// Outbox configures the relay that publishes order.confirmed events.
 	Outbox Outbox `envPrefix:"OUTBOX_"`
 

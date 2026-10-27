@@ -26,7 +26,8 @@ server-wide relaxed durability is not the service's to change.
   `n = max(1, min(STOCK_SHARDS, total_stock / per_user_limit))`. Capacities
   differ by at most one unit. Capping `n` keeps every shard at least
   `per_user_limit` units, so a buyer's largest allowed request fits in an
-  empty shard. `STOCK_SHARDS` defaults to 8 (1 to 256).
+  empty shard. `STOCK_SHARDS` defaults to 32 (1 to 256); see the update
+  below.
 - A reservation takes one shard with room, chosen with
   `FOR NO KEY UPDATE SKIP LOCKED`, so concurrent sales spread over shards
   instead of queuing on one row. If every shard with room is locked, it
@@ -80,3 +81,17 @@ server-wide relaxed durability is not the service's to change.
 - **Schema cost.** Every query that read `deals.reserved` or `deals.sold`
   now joins the shards. The down migration rebuilds the columns from the
   shard sums.
+
+## Update: 32 shards by default
+
+Profiling scenario A ([pg-profile.md](../../test/load/results/pg-profile.md))
+found that with 8 shards, 65–82 % of PostgreSQL's active session time was
+spent waiting on shard row locks. Up to 20 pool connections compete for 8
+rows, so `SKIP LOCKED` often found every shard taken and fell back to
+waiting. With 32 shards, more than the pool size, those waits fell to
+19–32 %. Scenario A's p99 dropped from 258–500 ms to 111–181 ms, and
+scenario B's stayed at 5.6–15.4 ms. The default is now 32.
+
+Smaller shards make the accepted fragmentation case a little more likely
+for multi-unit requests. A shard is still never smaller than
+`per_user_limit`.

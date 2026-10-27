@@ -24,7 +24,7 @@ data:
   READINESS_TIMEOUT: 2s
   RATE_LIMIT_RPS: "50"
   RATE_LIMIT_BURST: "100"
-  STOCK_SHARDS: "8"
+  STOCK_SHARDS: "32"
   # order.confirmed events, at least once (ADR 0012)
   OUTBOX_EVERY: "1s"
   OUTBOX_STREAM: "flashdeal:events"
