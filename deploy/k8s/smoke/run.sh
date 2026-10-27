@@ -47,32 +47,42 @@ if [[ "$ready" -ne 1 ]]; then
   exit 1
 fi
 
-code="$(curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/healthz)"
+code=$(curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/healthz)
 [[ "$code" == "200" ]]
 
 # One authenticated round trip through the Service (two replicas behind it).
 SECRET='flashdeal-local-dev-secret-change-me!!'
-ADMIN="$(cd "$ROOT" && go run ./cmd/token -secret "$SECRET" -sub ops -role admin)"
-USER="$(cd "$ROOT" && go run ./cmd/token -secret "$SECRET" -sub smoke-user -role user)"
-DEAL="$(curl -sf -X POST http://127.0.0.1:18080/v1/deals \
-  -H "Authorization: Bearer $ADMIN" -H 'Idempotency-Key: k8s-smoke-deal' \
+ADMIN=$(cd "$ROOT" && go run ./cmd/token -secret "$SECRET" -sub ops -role admin)
+USER=$(cd "$ROOT" && go run ./cmd/token -secret "$SECRET" -sub smoke-user -role user)
+
+cat >/tmp/flashdeal-create-deal.json <<'JSON'
+{"product_id":"sku-smoke","title":"Smoke","price_cents":999,"currency":"USD","total_stock":2,"per_user_limit":1,"starts_at":"2026-01-01T00:00:00Z","ends_at":"2030-01-01T00:00:00Z"}
+JSON
+
+curl -sf -X POST http://127.0.0.1:18080/v1/deals \
+  -H "Authorization: Bearer ${ADMIN}" \
   -H 'Content-Type: application/json' \
-  -d '{"product_id":"sku-smoke","title":"Smoke","price_cents":999,"currency":"USD","total_stock":2,"per_user_limit":1,"starts_at":"2026-01-01T00:00:00Z","ends_at":"2030-01-01T00:00:00Z"}")"
-printf '%s' "$DEAL" > /tmp/flashdeal-deal.json
+  -d @/tmp/flashdeal-create-deal.json \
+  -o /tmp/flashdeal-deal.json
+
 DEAL_ID=$(python3 <<'PY'
 import json
 print(json.load(open("/tmp/flashdeal-deal.json"))["id"])
 PY
 )
+
 curl -sf -X POST "http://127.0.0.1:18080/v1/deals/${DEAL_ID}/activate" \
-  -H "Authorization: Bearer $ADMIN" >/dev/null
-RES_CODE="$(curl -s -o /tmp/flashdeal-reserve.json -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer ${ADMIN}" >/dev/null
+
+RES_CODE=$(curl -s -o /tmp/flashdeal-reserve.json -w '%{http_code}' -X POST \
   "http://127.0.0.1:18080/v1/deals/${DEAL_ID}/reservations" \
-  -H "Authorization: Bearer $USER" -H 'Idempotency-Key: k8s-smoke-reserve' \
-  -H 'Content-Type: application/json' -d '{"quantity":1}')"
+  -H "Authorization: Bearer ${USER}" \
+  -H 'Idempotency-Key: k8s-smoke-reserve' \
+  -H 'Content-Type: application/json' \
+  -d '{"quantity":1}')
 [[ "$RES_CODE" == "201" ]]
 
-REPLICAS="$(kubectl -n "$NAMESPACE" get deploy flashdeal-api -o jsonpath='{.status.readyReplicas}')"
+REPLICAS=$(kubectl -n "$NAMESPACE" get deploy flashdeal-api -o jsonpath='{.status.readyReplicas}')
 [[ "$REPLICAS" -ge 2 ]]
 
-echo "k8s smoke ok (healthz=$code, readyz=200, reserve=201, readyReplicas=$REPLICAS, image=$IMAGE)"
+echo "k8s smoke ok (healthz=${code}, readyz=200, reserve=201, readyReplicas=${REPLICAS}, image=${IMAGE})"
