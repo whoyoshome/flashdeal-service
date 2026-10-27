@@ -1,5 +1,6 @@
 # Local development stack. Credentials here are for local use only.
-# Jaeger, Prometheus and Grafana are added in phase 6 (observability).
+# Jaeger, Prometheus and Grafana belong to the "observability" profile:
+# `make up` starts them, CI's end-to-end job does not.
 name: flashdeal
 
 x-postgres-url: &postgres-url postgres://flashdeal:flashdeal@postgres:5432/flashdeal?sslmode=disable
@@ -38,6 +39,12 @@ services:
       LOG_LEVEL: info
       POSTGRES_URL: *postgres-url
       REDIS_ADDR: redis:6379
+      # CI sets the endpoint empty: it runs without the observability profile.
+      # Sampling a tenth of new traces keeps a k6 burst from flooding Jaeger.
+      TRACING_OTLP_ENDPOINT: ${TRACING_OTLP_ENDPOINT-http://jaeger:4318}
+      TRACING_SAMPLE_RATIO: ${TRACING_SAMPLE_RATIO-0.1}
+      # Matches Prometheus' 1s scrape (deploy/prometheus.yml).
+      STOCK_SAMPLE_EVERY: 1s
     ports:
       - "8080:8080"
       # pprof; bound to the host's loopback so it is never exposed.
@@ -61,6 +68,44 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0
+    profiles: ["observability"]
+    ports:
+      - "127.0.0.1:16686:16686" # UI
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    profiles: ["observability"]
+    environment:
+      # Local only: anyone reaching the port can view dashboards; editing
+      # still needs the admin login.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/flashdeal.json
+      # Keep the plugins bundled in the pinned image. Otherwise Grafana
+      # downloads newer data source plugins at startup, and while one is
+      # being replaced every panel using it fails.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
 
 volumes:
   pgdata:

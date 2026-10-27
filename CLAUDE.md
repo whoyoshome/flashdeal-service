@@ -12,7 +12,7 @@ High-concurrency flash-sale API in Go. Sells a limited stock during a short wind
 
 ## Commands
 
-- `make up` / `make down` — start/stop Postgres, Redis and the API via Docker Compose (Jaeger, Prometheus, Grafana join in phase 6)
+- `make up` / `make down` — start/stop Postgres, Redis, the API, Jaeger, Prometheus and Grafana via Docker Compose (`make up PROFILES=` skips the observability services, as CI does)
 - `make migrate` — apply migrations
 - `make test` — unit tests with `-race`
 - `make test-integration` — integration tests (`-tags=integration`, testcontainers)

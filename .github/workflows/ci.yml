@@ -58,7 +58,11 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Start the stack
-        run: make up && make migrate
+        # Without the observability profile, and with tracing off since no
+        # collector runs.
+        env:
+          TRACING_OTLP_ENDPOINT: ""
+        run: make up PROFILES= && make migrate
       - name: End-to-end tests
         run: make test-e2e
       - name: API logs

@@ -11,19 +11,22 @@ K6_IMAGE      ?= grafana/k6:2.3.0
 # k6 joins the Compose network and calls the api service directly.
 K6_NETWORK    ?= flashdeal_default
 LOAD_SUMMARY  ?= test/load/results/latest.json
+# Compose profiles started by `make up`. CI clears it (make up PROFILES=) to
+# run only the API and its stores.
+PROFILES      ?= --profile observability
 
 .PHONY: check up down migrate test test-integration test-e2e lint lint-api load build tidy
 
 ## check: lint and unit tests (required before declaring a task done)
 check: lint test
 
-## up: start the local stack and wait until dependencies are healthy
+## up: start the local stack (API, stores, Jaeger, Prometheus, Grafana) and wait until healthy
 up:
-	$(COMPOSE) up -d --build --wait
+	$(COMPOSE) $(PROFILES) up -d --build --wait
 
 ## down: stop the local stack (data volumes are kept)
 down:
-	$(COMPOSE) down
+	$(COMPOSE) --profile observability down
 
 ## migrate: apply database migrations with the golang-migrate container
 migrate:

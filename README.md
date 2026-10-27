@@ -24,9 +24,20 @@ curl -i localhost:8080/readyz
 make down
 ```
 
-`make up` builds the API image and starts PostgreSQL and Redis, waiting until
-they are healthy. `make migrate` applies the SQL schema in
-[`migrations/`](migrations).
+`make up` builds the API image and starts PostgreSQL, Redis, the API and the
+observability stack, waiting until they are healthy. `make migrate` applies
+the SQL schema in [`migrations/`](migrations).
+
+| Service    | URL                                           |
+| ---------- | --------------------------------------------- |
+| API        | <http://localhost:8080>                         |
+| Grafana    | <http://localhost:3000> (FlashDeal dashboard)   |
+| Prometheus | <http://localhost:9090>                         |
+| Jaeger     | <http://localhost:16686>                        |
+| pprof      | <http://localhost:6060/debug/pprof/>            |
+
+Everything except the API is bound to `127.0.0.1`. `make up PROFILES=`
+starts only the API, PostgreSQL and Redis.
 
 `make test-integration` starts a disposable PostgreSQL with testcontainers, so
 Docker must be running.
@@ -131,10 +142,24 @@ Profiling (`net/http/pprof`) is served on a separate admin listener,
 go tool pprof "http://localhost:6060/debug/pprof/profile?seconds=10"
 ```
 
+### Dashboard
+
+Grafana opens on the **FlashDeal - flash sale** dashboard, versioned in
+[`deploy/grafana/dashboards/flashdeal.json`](deploy/grafana/dashboards/flashdeal.json)
+(provisioned read-only: edit the JSON, not the UI). It shows the stock left
+in the gate per deal, reservation outcomes, the sold-out share, request
+timeouts, gate repairs, p99 latency and status per route, the PostgreSQL
+pool and time spent waiting for a connection. Prometheus scrapes the API
+every second, and Compose samples the stock every second too
+([`deploy/prometheus.yml`](deploy/prometheus.yml)): a deal's gate empties in
+under a second. Run `make
+load` with the stack up to watch a deal sell out.
+
 ### Tracing
 
-With `TRACING_OTLP_ENDPOINT` set (an OTLP/HTTP collector such as Jaeger,
-for example `http://jaeger:4318`), the service exports OpenTelemetry traces:
+With `TRACING_OTLP_ENDPOINT` set (an OTLP/HTTP collector such as Jaeger;
+Docker Compose points it at `http://jaeger:4318` and samples 10 % of new
+traces), the service exports OpenTelemetry traces:
 
 - one server span per `/v1` request, named after its route
   (`POST /v1/deals/{id}/reservations`), continuing the caller's trace when

@@ -1,0 +1,12 @@
+# Loads the dashboards versioned in deploy/grafana/dashboards. Edits made in
+# the UI are not saved back: change the JSON file and restart Grafana.
+apiVersion: 1
+
+providers:
+  - name: flashdeal
+    folder: FlashDeal
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
