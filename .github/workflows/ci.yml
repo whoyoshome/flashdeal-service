@@ -29,6 +29,8 @@ jobs:
           govulncheck ./...
       - name: OpenAPI contract
         run: make lint-api
+      - name: Kubernetes manifests
+        run: make lint-k8s
 
   test:
     runs-on: ubuntu-latest

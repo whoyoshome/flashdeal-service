@@ -19,6 +19,7 @@ High-concurrency flash-sale API in Go. Sells a limited stock during a short wind
 - `make test-chaos` — chaos tests against the running stack (`-tags=chaos`): Redis stopped and SIGTERM under load
 - `make lint` — `golangci-lint run` + `govulncheck ./...`
 - `make lint-api` — validate `api/openapi.yaml` with Redocly (Docker); run it whenever the contract changes
+- `make lint-k8s` — validate `deploy/k8s/` with kubeconform (Docker); run it whenever a manifest changes
 - `make load` — k6 scenario in `test/load`
 - `make demo` — `make up` + `make migrate` + a short k6 flash sale (correctness thresholds only) for a first look
 - `make token` — mint a local HS256 JWT (`TOKEN_SUB`, `TOKEN_ROLE=user|admin`)

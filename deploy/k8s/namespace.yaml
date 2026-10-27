@@ -4,3 +4,7 @@ metadata:
   name: flashdeal
   labels:
     app.kubernetes.io/name: flashdeal
+    # Pod Security Admission rejects any pod in this namespace that is not
+    # non-root, capability-free and seccomp-confined.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

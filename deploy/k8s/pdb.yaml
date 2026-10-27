@@ -1,0 +1,16 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: flashdeal-api
+  namespace: flashdeal
+  labels:
+    app.kubernetes.io/name: flashdeal
+    app.kubernetes.io/component: api
+spec:
+  # Node drains and cluster upgrades evict one replica at a time, so a
+  # flash sale in progress always has a replica serving.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flashdeal
+      app.kubernetes.io/component: api

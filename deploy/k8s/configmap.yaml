@@ -7,7 +7,8 @@ metadata:
     app.kubernetes.io/name: flashdeal
 data:
   HTTP_ADDR: ":8080"
-  ADMIN_ADDR: ":6060"
+  # pprof only on the pod's loopback: reach it with kubectl port-forward.
+  ADMIN_ADDR: "127.0.0.1:6060"
   LOG_LEVEL: info
   JWT_ISSUER: flashdeal
   REDIS_ADDR: redis:6379
