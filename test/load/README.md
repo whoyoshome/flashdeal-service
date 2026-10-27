@@ -64,6 +64,17 @@ ConfigMaps, runs the Job, prints the k6 output and saves the summary to
 `results/k8s-job.json` (`LOAD_K8S_SUMMARY` changes the path). A crossed
 threshold fails the Job and the target, but the summary is still saved.
 
+## Profiling PostgreSQL during a run
+
+[`pg_profile.sh`](pg_profile.sh) runs `make load` while sampling
+`pg_stat_activity` every 200 ms, diffing the WAL and transaction counters,
+and sampling container CPU. It prints the share of active session time per
+wait event (CPU, row locks, I/O, ...):
+
+```bash
+STOCK=10000 PEAK_RPS=5000 RAMP=2s HOLD=20s ./test/load/pg_profile.sh test/load/results/pg-profile
+```
+
 ## Reading the summary
 
 - `dropped_iterations` counts attempts k6 could not even start because all
@@ -81,3 +92,4 @@ threshold fails the Job and the target, but the summary is still saved.
 - [Phase 7: chaos under load (Redis down, SIGTERM)](results/chaos.md)
 - [Stock shards: 1 vs 8 rows, 1 vs 2 replicas](results/stock-shards.md)
 - [k6 inside the cluster: scenarios A and B on 2 replicas](results/k8s-in-cluster.md)
+- [Scenario A profiled: row-lock waits, and 32 shards](results/pg-profile.md)

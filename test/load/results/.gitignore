@@ -1,2 +1,3 @@
 # Raw k6 summaries from local runs; curated results are committed as .md.
 *.json
+pg-profile*/
