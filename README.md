@@ -405,6 +405,10 @@ go tool pprof "http://localhost:6060/debug/pprof/profile?seconds=10"
 | `make lint-api` | Validates `api/openapi.yaml` with Redocly |
 
 CI runs lint, unit, integration and end-to-end tests on every pull request.
+When they pass on `main` or on a `v*` tag, it publishes the image to
+`ghcr.io/whoyoshome/flashdeal-service` (`main` and `sha-<commit>` from
+`main`, `1.2.3` from `v1.2.3`). Pull requests build the image without
+publishing it.
 
 ## Known limitations and next steps
 

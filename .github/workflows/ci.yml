@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -77,13 +78,33 @@ jobs:
   image:
     runs-on: ubuntu-latest
     needs: [lint, test, integration, e2e]
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
+      # Release tags v1.2.3 publish 1.2.3; main publishes main and sha-<short>.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=main,enable={{is_default_branch}}
+            type=sha,prefix=sha-,enable=${{ github.ref_type == 'branch' }}
+      # Pull requests only build: forks and unmerged code never reach GHCR.
+      - if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
           context: .
-          push: false
-          tags: flashdeal-service:ci
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
