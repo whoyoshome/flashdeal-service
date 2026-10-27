@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/whoyoshome/flashdeal-service/internal/platform/auth"
 )
 
 var (
@@ -26,9 +28,28 @@ var (
 	client  = &http.Client{Timeout: 10 * time.Second}
 	// runID keeps users and idempotency keys unique across runs against the
 	// same database.
-	runID = time.Now().UnixNano()
-	seq   atomic.Int64
+	runID  = time.Now().UnixNano()
+	seq    atomic.Int64
+	tokens = mustTokens()
 )
+
+func mustTokens() *auth.Service {
+	s, err := auth.New(auth.Config{
+		Secret: envOr("JWT_SECRET", "flashdeal-local-dev-secret-change-me!!"),
+		Issuer: envOr("JWT_ISSUER", "flashdeal"),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+func bearer(t *testing.T, subject string, role auth.Role) string {
+	t.Helper()
+	tok, err := tokens.Issue(subject, role, time.Hour)
+	require.NoError(t, err)
+	return "Bearer " + tok
+}
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -67,8 +88,14 @@ func call(t *testing.T, method, path, body string, headers map[string]string) re
 	return out
 }
 
-func asUser(user, key string) map[string]string {
-	return map[string]string{"X-User-ID": user, "Idempotency-Key": key}
+func asUser(t *testing.T, user, key string) map[string]string {
+	t.Helper()
+	return map[string]string{"Authorization": bearer(t, user, auth.RoleUser), "Idempotency-Key": key}
+}
+
+func asAdmin(t *testing.T) map[string]string {
+	t.Helper()
+	return map[string]string{"Authorization": bearer(t, "e2e-admin", auth.RoleAdmin)}
 }
 
 // createDeal creates a deal active now and, unless activate is false, opens
@@ -79,11 +106,11 @@ func createDeal(t *testing.T, stock, limit int, activate bool) int64 {
 	body := fmt.Sprintf(`{"product_id":%q,"title":"e2e","price_cents":4999,"currency":"USD",`+
 		`"total_stock":%d,"per_user_limit":%d,"starts_at":%q,"ends_at":%q}`,
 		unique("sku"), stock, limit, now.Add(-time.Minute).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339))
-	res := call(t, http.MethodPost, "/v1/deals", body, nil)
+	res := call(t, http.MethodPost, "/v1/deals", body, asAdmin(t))
 	require.Equal(t, http.StatusCreated, res.Status, res.RawBody)
 	id := int64(res.Body["id"].(float64))
 	if activate {
-		act := call(t, http.MethodPost, fmt.Sprintf("/v1/deals/%d/activate", id), "", nil)
+		act := call(t, http.MethodPost, fmt.Sprintf("/v1/deals/%d/activate", id), "", asAdmin(t))
 		require.Equal(t, http.StatusOK, act.Status, act.RawBody)
 	}
 	return id
@@ -108,8 +135,8 @@ func TestRetrySameIdempotencyKey_SingleReservation(t *testing.T) {
 	deal := createDeal(t, 10, 2, true)
 	user, key := unique("user"), unique("key")
 
-	first := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(user, key))
-	retry := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(user, key))
+	first := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(t, user, key))
+	retry := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(t, user, key))
 
 	require.Equal(t, http.StatusCreated, first.Status, first.RawBody)
 	require.Equal(t, http.StatusCreated, retry.Status, retry.RawBody)
@@ -132,7 +159,7 @@ func TestConcurrentRetries_SingleReservation(t *testing.T) {
 	var wg sync.WaitGroup
 	for range retries {
 		wg.Go(func() {
-			res := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(user, key))
+			res := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(t, user, key))
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -156,9 +183,9 @@ func TestIdempotencyKeyReusedForDifferentRequest(t *testing.T) {
 	t.Parallel()
 	deal := createDeal(t, 10, 5, true)
 	user, key := unique("user"), unique("key")
-	require.Equal(t, http.StatusCreated, call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(user, key)).Status)
+	require.Equal(t, http.StatusCreated, call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(t, user, key)).Status)
 
-	res := call(t, http.MethodPost, reservePath(deal), `{"quantity":2}`, asUser(user, key))
+	res := call(t, http.MethodPost, reservePath(deal), `{"quantity":2}`, asUser(t, user, key))
 
 	require.Equal(t, http.StatusConflict, res.Status)
 	require.Equal(t, "CONFLICT", res.Body["code"])
@@ -169,7 +196,7 @@ func TestReserveRequiresActivation(t *testing.T) {
 	t.Parallel()
 	deal := createDeal(t, 10, 1, false)
 
-	res := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(unique("user"), unique("key")))
+	res := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(t, unique("user"), unique("key")))
 
 	require.Equal(t, http.StatusConflict, res.Status)
 	require.Equal(t, "DEAL_NOT_ACTIVE", res.Body["code"])
@@ -181,35 +208,35 @@ func TestReserveConfirmCancelFlow(t *testing.T) {
 	alice, bob := unique("alice"), unique("bob")
 
 	// alice reserves and confirms one unit.
-	res := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(alice, unique("key")))
+	res := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(t, alice, unique("key")))
 	require.Equal(t, http.StatusCreated, res.Status, res.RawBody)
 	resID := res.Body["id"].(string)
-	order := call(t, http.MethodPost, "/v1/reservations/"+resID+"/confirm", "", map[string]string{"X-User-ID": alice})
+	order := call(t, http.MethodPost, "/v1/reservations/"+resID+"/confirm", "", map[string]string{"Authorization": bearer(t, alice, auth.RoleUser)})
 	require.Equal(t, http.StatusOK, order.Status, order.RawBody)
 	require.InDelta(t, 4999, order.Body["total_cents"], 0)
 
 	// The order is final: it can be neither confirmed again nor cancelled.
-	again := call(t, http.MethodPost, "/v1/reservations/"+resID+"/confirm", "", map[string]string{"X-User-ID": alice})
+	again := call(t, http.MethodPost, "/v1/reservations/"+resID+"/confirm", "", map[string]string{"Authorization": bearer(t, alice, auth.RoleUser)})
 	require.Equal(t, http.StatusConflict, again.Status)
-	cancelled := call(t, http.MethodDelete, "/v1/reservations/"+resID, "", map[string]string{"X-User-ID": alice})
+	cancelled := call(t, http.MethodDelete, "/v1/reservations/"+resID, "", map[string]string{"Authorization": bearer(t, alice, auth.RoleUser)})
 	require.Equal(t, http.StatusConflict, cancelled.Status)
 
 	// bob takes the other two units, then gives one back.
-	bobRes := call(t, http.MethodPost, reservePath(deal), `{"quantity":2}`, asUser(bob, unique("key")))
+	bobRes := call(t, http.MethodPost, reservePath(deal), `{"quantity":2}`, asUser(t, bob, unique("key")))
 	require.Equal(t, http.StatusCreated, bobRes.Status, bobRes.RawBody)
-	soldOut := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(unique("carol"), unique("key")))
+	soldOut := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(t, unique("carol"), unique("key")))
 	require.Equal(t, "SOLD_OUT", soldOut.Body["code"])
 
 	// Another user cannot see or cancel bob's reservation.
-	intruder := call(t, http.MethodDelete, "/v1/reservations/"+bobRes.Body["id"].(string), "", map[string]string{"X-User-ID": alice})
+	intruder := call(t, http.MethodDelete, "/v1/reservations/"+bobRes.Body["id"].(string), "", map[string]string{"Authorization": bearer(t, alice, auth.RoleUser)})
 	require.Equal(t, http.StatusNotFound, intruder.Status)
 
-	gone := call(t, http.MethodDelete, "/v1/reservations/"+bobRes.Body["id"].(string), "", map[string]string{"X-User-ID": bob})
+	gone := call(t, http.MethodDelete, "/v1/reservations/"+bobRes.Body["id"].(string), "", map[string]string{"Authorization": bearer(t, bob, auth.RoleUser)})
 	require.Equal(t, http.StatusNoContent, gone.Status)
 
 	// The cancelled units are back on sale.
 	requireAvailable(t, deal, 2)
-	carol := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(unique("carol"), unique("key")))
+	carol := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(t, unique("carol"), unique("key")))
 	require.Equal(t, http.StatusCreated, carol.Status, carol.RawBody)
 }
 
@@ -232,8 +259,8 @@ func scrapeMetrics(t *testing.T) string {
 func TestMetricsReportReservationsAndStock(t *testing.T) {
 	t.Parallel()
 	deal := createDeal(t, 1, 1, true)
-	require.Equal(t, http.StatusCreated, call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(unique("user"), unique("key"))).Status)
-	soldOut := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(unique("user"), unique("key")))
+	require.Equal(t, http.StatusCreated, call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(t, unique("user"), unique("key"))).Status)
+	soldOut := call(t, http.MethodPost, reservePath(deal), `{"quantity":1}`, asUser(t, unique("user"), unique("key")))
 	require.Equal(t, "SOLD_OUT", soldOut.Body["code"])
 
 	metrics := scrapeMetrics(t)

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: FlashDeal Service API
-  version: 0.7.0
+  version: 0.8.0
   summary: High-concurrency flash-sale API with zero overselling.
   description: |
     Sells a limited stock of a product during a short window. A user reserves
@@ -11,8 +11,10 @@ info:
     Every error uses the same body: `{"code", "message", "request_id"}`.
     Clients may branch on `code`, which is stable.
 
-    Authentication is out of scope: reservation endpoints identify the caller
-    with the `X-User-ID` header. Admin endpoints are not protected yet.
+    Authentication uses Bearer JWTs (HS256). Claims: `sub` (user id),
+    `role` (`user` or `admin`), `iss`, `iat`, `exp`. Create/activate deals
+    require `role=admin`. Public deal reads, health and metrics stay open.
+    Locally mint tokens with `make token` (same secret as `JWT_SECRET`).
   license:
     name: MIT
     identifier: MIT
@@ -34,8 +36,10 @@ paths:
     post:
       tags: [deals]
       operationId: createDeal
-      security: []
+      security:
+        - bearerAuth: []
       summary: Create a deal (admin)
+      description: Requires a JWT with `role=admin`.
       requestBody:
         required: true
         content:
@@ -54,6 +58,10 @@ paths:
                 $ref: '#/components/schemas/Deal'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -134,7 +142,8 @@ paths:
     post:
       tags: [deals]
       operationId: activateDeal
-      security: []
+      security:
+        - bearerAuth: []
       summary: Open a deal's stock for reservations (admin)
       description: |
         Loads the deal's available units into the stock gate. A deal must be
@@ -154,6 +163,10 @@ paths:
                 $ref: '#/components/schemas/Deal'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -188,7 +201,7 @@ paths:
         on the deal (`USER_LIMIT_REACHED`). If the stock gate is unreachable the
         service fails closed with 503 `STOCK_UNAVAILABLE` and sells nothing.
       security:
-        - userId: []
+        - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -246,7 +259,7 @@ paths:
       summary: Confirm a reservation and create its order
       description: Payment is assumed approved. Only the reservation's owner may confirm it.
       security:
-        - userId: []
+        - bearerAuth: []
       responses:
         '200':
           description: The order created by the confirmation.
@@ -281,7 +294,7 @@ paths:
       summary: Cancel a pending reservation and return its units
       description: Allowed while the reservation is pending, even after its TTL. Only the owner may cancel it.
       security:
-        - userId: []
+        - bearerAuth: []
       responses:
         '204':
           description: Reservation cancelled.
@@ -359,11 +372,13 @@ paths:
 
 components:
   securitySchemes:
-    userId:
-      type: apiKey
-      in: header
-      name: X-User-ID
-      description: Caller identity. A placeholder for real authentication (JWT) later.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        HS256 JWT. Claims: `sub` (user id), `role` (`user`|`admin`), `iss`,
+        `iat`, `exp`. Admin routes require `role=admin`.
 
   parameters:
     DealID:
@@ -588,6 +603,7 @@ components:
             - CONFLICT
             - STOCK_UNAVAILABLE
             - UNAUTHENTICATED
+            - FORBIDDEN
             - METHOD_NOT_ALLOWED
             - REQUEST_TIMEOUT
             - IDEMPOTENCY_IN_PROGRESS
@@ -605,7 +621,13 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     Unauthenticated:
-      description: Missing or invalid `X-User-ID` header (`UNAUTHENTICATED`).
+      description: Missing or invalid Bearer JWT (`UNAUTHENTICATED`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Valid token without the required role (`FORBIDDEN`).
       content:
         application/json:
           schema:

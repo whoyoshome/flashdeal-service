@@ -57,6 +57,16 @@ type Config struct {
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
 	Tracing  Tracing  `envPrefix:"TRACING_"`
+	Auth     Auth     `envPrefix:"JWT_"`
+}
+
+// Auth configures JWT verification (HS256). Tokens are issued by an IdP in
+// production; locally by `make token` / cmd/token with the same secret.
+type Auth struct {
+	// Secret is the HMAC key. Never log it. Required; at least 32 bytes.
+	Secret string `env:"SECRET,required,notEmpty"`
+	// Issuer must match the iss claim on every accepted token.
+	Issuer string `env:"ISSUER" envDefault:"flashdeal"`
 }
 
 // Postgres configures the pgx connection pool.
@@ -147,6 +157,12 @@ func (c Config) validate() error {
 	}
 	if c.Redis.PoolSize <= 0 {
 		errs = append(errs, errors.New("REDIS_POOL_SIZE must be positive"))
+	}
+	if len(c.Auth.Secret) < 32 {
+		errs = append(errs, errors.New("JWT_SECRET must be at least 32 bytes"))
+	}
+	if c.Auth.Issuer == "" {
+		errs = append(errs, errors.New("JWT_ISSUER is required"))
 	}
 
 	if err := errors.Join(errs...); err != nil {

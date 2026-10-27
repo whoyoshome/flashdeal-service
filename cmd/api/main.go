@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/whoyoshome/flashdeal-service/internal/delivery/httpapi"
+	"github.com/whoyoshome/flashdeal-service/internal/platform/auth"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/clock"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/config"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/logger"
@@ -41,6 +42,10 @@ const (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck())
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	err := run(ctx, os.Environ(), os.Stdout)
 	stop()
@@ -48,6 +53,27 @@ func main() {
 		fmt.Fprintf(os.Stderr, "flashdeal: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// healthcheck probes the local liveness endpoint so Docker/Kubernetes can
+// use the same binary as the process (distroless has no curl). The target is
+// fixed to loopback:8080 — the only listener the container exposes for the API.
+func healthcheck() int {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/healthz", nil)
+	if err != nil {
+		return 1
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 1
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
 }
 
 // run wires and starts the service and blocks until ctx is cancelled or a
@@ -59,6 +85,11 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	log := logger.New(stdout, cfg.LogLevel)
+
+	tokens, err := auth.New(auth.Config{Secret: cfg.Auth.Secret, Issuer: cfg.Auth.Issuer})
+	if err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
 
 	// Telemetry. Tracing is set up first and shut down last, so spans from
 	// the final requests and worker passes are still flushed.
@@ -129,6 +160,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 			Reserve:        reserve,
 			Confirm:        confirm,
 			Cancel:         cancelReservation,
+			Tokens:         tokens,
 			Idempotency:    redisrepo.NewIdempotencyStore(rdb),
 			IdempotencyTTL: cfg.IdempotencyTTL,
 			RequestTimeout: cfg.RequestTimeout,

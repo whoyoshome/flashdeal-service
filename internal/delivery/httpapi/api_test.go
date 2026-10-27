@@ -18,7 +18,13 @@ import (
 
 	"github.com/whoyoshome/flashdeal-service/internal/delivery/httpapi"
 	"github.com/whoyoshome/flashdeal-service/internal/domain"
+	"github.com/whoyoshome/flashdeal-service/internal/platform/auth"
 	"github.com/whoyoshome/flashdeal-service/internal/usecase"
+)
+
+const (
+	testJWTSecret = "test-secret-at-least-32-bytes-long!!"
+	testJWTIssuer = "flashdeal-test"
 )
 
 var t0 = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
@@ -121,12 +127,15 @@ type api struct {
 	confirmer *fakeConfirmer
 	canceller *fakeCanceller
 	metrics   *fakeMetrics
+	tokens    *auth.Service
 	logs      *bytes.Buffer
 	handler   http.Handler
 }
 
 func newAPI(t *testing.T) *api {
 	t.Helper()
+	tokens, err := auth.New(auth.Config{Secret: testJWTSecret, Issuer: testJWTIssuer})
+	require.NoError(t, err)
 	a := &api{
 		deals:     &fakeDealManager{deal: sampleDeal(t)},
 		queries:   &fakeDealFinder{deal: sampleDeal(t)},
@@ -134,6 +143,7 @@ func newAPI(t *testing.T) *api {
 		confirmer: &fakeConfirmer{order: sampleOrder(t)},
 		canceller: &fakeCanceller{},
 		metrics:   &fakeMetrics{},
+		tokens:    tokens,
 		logs:      &bytes.Buffer{},
 	}
 	a.handler = httpapi.NewRouter(httpapi.Deps{
@@ -143,11 +153,28 @@ func newAPI(t *testing.T) *api {
 		Reserve:        a.reserver,
 		Confirm:        a.confirmer,
 		Cancel:         a.canceller,
+		Tokens:         tokens,
 		Metrics:        a.metrics,
 		MetricsHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("# metrics\n")) }),
 		RequestTimeout: 5 * time.Second,
 	})
 	return a
+}
+
+func (a *api) bearer(t *testing.T, subject string, role auth.Role) string {
+	t.Helper()
+	tok, err := a.tokens.Issue(subject, role, time.Hour)
+	require.NoError(t, err)
+	return "Bearer " + tok
+}
+
+func (a *api) withAuth(t *testing.T, c call, subject string, role auth.Role) call {
+	t.Helper()
+	if c.headers == nil {
+		c.headers = map[string]string{}
+	}
+	c.headers["Authorization"] = a.bearer(t, subject, role)
+	return c
 }
 
 type call struct {
@@ -238,7 +265,7 @@ func TestCreateDeal(t *testing.T) {
 		t.Parallel()
 		a := newAPI(t)
 
-		rec := a.do(t, call{method: http.MethodPost, path: "/v1/deals", body: validDealBody})
+		rec := a.do(t, a.withAuth(t, call{method: http.MethodPost, path: "/v1/deals", body: validDealBody}, "admin", auth.RoleAdmin))
 
 		require.Equal(t, http.StatusCreated, rec.Code)
 		got := decode[map[string]any](t, rec)
@@ -250,6 +277,20 @@ func TestCreateDeal(t *testing.T) {
 			ProductID: "sku-1", Title: "Headphones", PriceCents: 4999, Currency: "USD",
 			TotalStock: 100, PerUserLimit: 2, StartsAt: t0, EndsAt: t0.Add(time.Hour),
 		}, a.deals.created)
+	})
+
+	t.Run("returns 401 without a Bearer token", func(t *testing.T) {
+		t.Parallel()
+		a := newAPI(t)
+		requireError(t, a.do(t, call{method: http.MethodPost, path: "/v1/deals", body: validDealBody}),
+			http.StatusUnauthorized, "UNAUTHENTICATED")
+	})
+
+	t.Run("returns 403 for a non-admin token", func(t *testing.T) {
+		t.Parallel()
+		a := newAPI(t)
+		requireError(t, a.do(t, a.withAuth(t, call{method: http.MethodPost, path: "/v1/deals", body: validDealBody}, "alice", auth.RoleUser)),
+			http.StatusForbidden, "FORBIDDEN")
 	})
 
 	badBodies := []struct {
@@ -267,7 +308,7 @@ func TestCreateDeal(t *testing.T) {
 			t.Parallel()
 			a := newAPI(t)
 
-			rec := a.do(t, call{method: http.MethodPost, path: "/v1/deals", body: tc.body})
+			rec := a.do(t, a.withAuth(t, call{method: http.MethodPost, path: "/v1/deals", body: tc.body}, "admin", auth.RoleAdmin))
 
 			requireError(t, rec, http.StatusBadRequest, "VALIDATION_ERROR")
 		})
@@ -278,7 +319,7 @@ func TestCreateDeal(t *testing.T) {
 		a := newAPI(t)
 		a.deals.createErr = domain.NewValidation("total_stock must be positive")
 
-		rec := a.do(t, call{method: http.MethodPost, path: "/v1/deals", body: validDealBody})
+		rec := a.do(t, a.withAuth(t, call{method: http.MethodPost, path: "/v1/deals", body: validDealBody}, "admin", auth.RoleAdmin))
 
 		body := requireError(t, rec, http.StatusBadRequest, "VALIDATION_ERROR")
 		require.Equal(t, "total_stock must be positive", body.Message)
@@ -307,7 +348,7 @@ func TestActivateDeal(t *testing.T) {
 			a := newAPI(t)
 			a.deals.activateEr = tc.err
 
-			rec := a.do(t, call{method: http.MethodPost, path: tc.path})
+			rec := a.do(t, a.withAuth(t, call{method: http.MethodPost, path: tc.path}, "admin", auth.RoleAdmin))
 
 			if tc.wantCode != "" {
 				requireError(t, rec, tc.status, tc.wantCode)
@@ -383,7 +424,7 @@ func TestListDeals(t *testing.T) {
 func reserveCall(body string) call {
 	return call{
 		method: http.MethodPost, path: "/v1/deals/7/reservations", body: body,
-		headers: map[string]string{"X-User-ID": "user-1", "Idempotency-Key": "key-1"},
+		headers: map[string]string{"Idempotency-Key": "key-1"},
 	}
 }
 
@@ -394,7 +435,7 @@ func TestReserve(t *testing.T) {
 		t.Parallel()
 		a := newAPI(t)
 
-		rec := a.do(t, reserveCall(`{"quantity":2}`))
+		rec := a.do(t, a.withAuth(t, reserveCall(`{"quantity":2}`), "user-1", auth.RoleUser))
 
 		require.Equal(t, http.StatusCreated, rec.Code)
 		require.Equal(t, usecase.ReserveInput{DealID: 7, UserID: "user-1", Quantity: 2, IdempotencyKey: "key-1"}, a.reserver.got)
@@ -403,13 +444,11 @@ func TestReserve(t *testing.T) {
 		require.Equal(t, "2026-10-15T12:05:00Z", got["expires_at"])
 	})
 
-	t.Run("returns 401 without X-User-ID before reaching the use case", func(t *testing.T) {
+	t.Run("returns 401 without a Bearer token before reaching the use case", func(t *testing.T) {
 		t.Parallel()
 		a := newAPI(t)
-		c := reserveCall(`{"quantity":2}`)
-		delete(c.headers, "X-User-ID")
 
-		requireError(t, a.do(t, c), http.StatusUnauthorized, "UNAUTHENTICATED")
+		requireError(t, a.do(t, reserveCall(`{"quantity":2}`)), http.StatusUnauthorized, "UNAUTHENTICATED")
 		require.Zero(t, a.reserver.got)
 	})
 
@@ -417,14 +456,14 @@ func TestReserve(t *testing.T) {
 		t.Parallel()
 		a := newAPI(t)
 
-		requireError(t, a.do(t, reserveCall(`{"qty":2}`)), http.StatusBadRequest, "VALIDATION_ERROR")
+		requireError(t, a.do(t, a.withAuth(t, reserveCall(`{"qty":2}`), "user-1", auth.RoleUser)), http.StatusBadRequest, "VALIDATION_ERROR")
 		require.Zero(t, a.reserver.got)
 	})
 
 	t.Run("returns 400 without an Idempotency-Key", func(t *testing.T) {
 		t.Parallel()
 		a := newAPI(t)
-		c := reserveCall(`{"quantity":2}`)
+		c := a.withAuth(t, reserveCall(`{"quantity":2}`), "user-1", auth.RoleUser)
 		delete(c.headers, "Idempotency-Key")
 
 		requireError(t, a.do(t, c), http.StatusBadRequest, "VALIDATION_ERROR")
@@ -449,7 +488,7 @@ func TestReserve(t *testing.T) {
 			a := newAPI(t)
 			a.reserver.err = fmt.Errorf("stock gate: %w", tc.err)
 
-			requireError(t, a.do(t, reserveCall(`{"quantity":2}`)), tc.status, tc.code)
+			requireError(t, a.do(t, a.withAuth(t, reserveCall(`{"quantity":2}`), "user-1", auth.RoleUser)), tc.status, tc.code)
 		})
 	}
 }
@@ -459,14 +498,13 @@ func TestConfirm(t *testing.T) {
 
 	confirmCall := call{
 		method: http.MethodPost, path: "/v1/reservations/0192f0c4-6a3b-7c1d-9e2f-3a4b5c6d7e8f/confirm",
-		headers: map[string]string{"X-User-ID": "user-1"},
 	}
 
 	t.Run("returns 200 with the order", func(t *testing.T) {
 		t.Parallel()
 		a := newAPI(t)
 
-		rec := a.do(t, confirmCall)
+		rec := a.do(t, a.withAuth(t, confirmCall, "user-1", auth.RoleUser))
 
 		require.Equal(t, http.StatusOK, rec.Code)
 		require.Equal(t, usecase.ConfirmInput{ReservationID: "0192f0c4-6a3b-7c1d-9e2f-3a4b5c6d7e8f", UserID: "user-1"}, a.confirmer.got)
@@ -490,7 +528,7 @@ func TestConfirm(t *testing.T) {
 			a := newAPI(t)
 			a.confirmer.err = tc.err
 
-			requireError(t, a.do(t, confirmCall), tc.status, tc.code)
+			requireError(t, a.do(t, a.withAuth(t, confirmCall, "user-1", auth.RoleUser)), tc.status, tc.code)
 		})
 	}
 }
@@ -500,14 +538,13 @@ func TestCancel(t *testing.T) {
 
 	cancelCall := call{
 		method: http.MethodDelete, path: "/v1/reservations/0192f0c4-6a3b-7c1d-9e2f-3a4b5c6d7e8f",
-		headers: map[string]string{"X-User-ID": "user-1"},
 	}
 
 	t.Run("returns 204 with no body", func(t *testing.T) {
 		t.Parallel()
 		a := newAPI(t)
 
-		rec := a.do(t, cancelCall)
+		rec := a.do(t, a.withAuth(t, cancelCall, "user-1", auth.RoleUser))
 
 		require.Equal(t, http.StatusNoContent, rec.Code)
 		require.Empty(t, rec.Body.String())
@@ -519,7 +556,7 @@ func TestCancel(t *testing.T) {
 		a := newAPI(t)
 		a.canceller.err = domain.ErrReservationNotPending
 
-		requireError(t, a.do(t, cancelCall), http.StatusConflict, "CONFLICT")
+		requireError(t, a.do(t, a.withAuth(t, cancelCall, "user-1", auth.RoleUser)), http.StatusConflict, "CONFLICT")
 	})
 }
 
@@ -545,7 +582,7 @@ func TestErrorHandling(t *testing.T) {
 		a := newAPI(t)
 		a.reserver.err = fmt.Errorf("persist reservation: reserve stock on deal 7: timeout: %w", context.DeadlineExceeded)
 
-		rec := a.do(t, reserveCall(`{"quantity":1}`))
+		rec := a.do(t, a.withAuth(t, reserveCall(`{"quantity":1}`), "user-1", auth.RoleUser))
 
 		body := requireError(t, rec, http.StatusServiceUnavailable, "REQUEST_TIMEOUT")
 		require.Equal(t, "request timed out, retry later", body.Message)
@@ -559,7 +596,7 @@ func TestErrorHandling(t *testing.T) {
 		a := newAPI(t)
 		a.reserver.err = fmt.Errorf("%w: %w", domain.ErrStockUnavailable, context.DeadlineExceeded)
 
-		requireError(t, a.do(t, reserveCall(`{"quantity":1}`)), http.StatusServiceUnavailable, "STOCK_UNAVAILABLE")
+		requireError(t, a.do(t, a.withAuth(t, reserveCall(`{"quantity":1}`), "user-1", auth.RoleUser)), http.StatusServiceUnavailable, "STOCK_UNAVAILABLE")
 	})
 
 	t.Run("hides corrupt state errors behind a generic 500", func(t *testing.T) {
@@ -567,7 +604,7 @@ func TestErrorHandling(t *testing.T) {
 		a := newAPI(t)
 		a.confirmer.err = fmt.Errorf("commit stock: %w", domain.ErrCorruptState)
 
-		rec := a.do(t, call{method: http.MethodPost, path: "/v1/reservations/x/confirm", headers: map[string]string{"X-User-ID": "u"}})
+		rec := a.do(t, a.withAuth(t, call{method: http.MethodPost, path: "/v1/reservations/x/confirm"}, "u", auth.RoleUser))
 
 		requireError(t, rec, http.StatusInternalServerError, "INTERNAL")
 	})
@@ -617,7 +654,7 @@ func TestMetricsReporting(t *testing.T) {
 			a := newAPI(t)
 			a.reserver.err = tc.err
 
-			a.do(t, reserveCall(`{"quantity":2}`))
+			a.do(t, a.withAuth(t, reserveCall(`{"quantity":2}`), "user-1", auth.RoleUser))
 
 			require.Equal(t, []string{tc.want}, a.metrics.reservations)
 		})
@@ -627,7 +664,7 @@ func TestMetricsReporting(t *testing.T) {
 		t.Parallel()
 		a := newAPI(t)
 
-		a.do(t, reserveCall(`{"qty":2}`))
+		a.do(t, a.withAuth(t, reserveCall(`{"qty":2}`), "user-1", auth.RoleUser))
 
 		require.Equal(t, []string{"validation_error"}, a.metrics.reservations)
 	})
@@ -637,7 +674,7 @@ func TestMetricsReporting(t *testing.T) {
 		a := newAPI(t)
 		a.reserver.err = domain.ErrSoldOut
 
-		a.do(t, reserveCall(`{"quantity":2}`))
+		a.do(t, a.withAuth(t, reserveCall(`{"quantity":2}`), "user-1", auth.RoleUser))
 
 		require.Equal(t, []string{"POST /v1/deals/{id}/reservations 409"}, a.metrics.routes)
 	})

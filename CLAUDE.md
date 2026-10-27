@@ -21,6 +21,7 @@ High-concurrency flash-sale API in Go. Sells a limited stock during a short wind
 - `make lint-api` — validate `api/openapi.yaml` with Redocly (Docker); run it whenever the contract changes
 - `make load` — k6 scenario in `test/load`
 - `make demo` — `make up` + `make migrate` + a short k6 flash sale (correctness thresholds only) for a first look
+- `make token` — mint a local HS256 JWT (`TOKEN_SUB`, `TOKEN_ROLE=user|admin`)
 - Before declaring any task done: `make lint test` must pass.
 
 ## Workflow
@@ -105,7 +106,7 @@ Rules:
 ## HTTP API
 
 - Router: `go-chi/chi/v5` on top of `net/http`. Versioned routes under `/v1`.
-- Middleware order: request ID → recoverer → logging → metrics → timeout → auth.
+- Middleware order: request ID → recoverer; on `/v1`: tracing → logging → metrics → timeout → auth (JWT) → (admin: RequireAdmin) → (create: idempotency).
 - `POST` endpoints that create resources require an `Idempotency-Key` header.
 - Any contract change updates `api/openapi.yaml` in the same commit.
 - `http.Server` always sets `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, `IdleTimeout`. Graceful shutdown on `SIGTERM`.
@@ -128,7 +129,7 @@ Rules:
 
 ## Dependencies
 
-Allowed: `go-chi/chi/v5`, `jackc/pgx/v5`, `redis/go-redis/v9`, `golang-migrate/migrate`, `caarlos0/env`, `prometheus/client_golang`, OpenTelemetry SDK, `golang.org/x/sync`, a UUID library, `stretchr/testify`, `testcontainers-go`.
+Allowed: `go-chi/chi/v5`, `jackc/pgx/v5`, `redis/go-redis/v9`, `golang-migrate/migrate`, `caarlos0/env`, `prometheus/client_golang`, OpenTelemetry SDK, `golang.org/x/sync`, a UUID library, `stretchr/testify`, `testcontainers-go`, `golang-jwt/jwt/v5` (ADR 0008).
 
 Anything else requires an ADR in `docs/adr/` and explicit approval. Never add a web framework (Gin, Echo, Fiber), an ORM (GORM) or a DI framework.
 

@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/whoyoshome/flashdeal-service/internal/platform/auth"
 )
 
 var (
@@ -41,9 +43,29 @@ var (
 		Timeout:   15 * time.Second,
 		Transport: &http.Transport{DisableKeepAlives: true},
 	}
-	runID = time.Now().UnixNano()
-	seq   atomic.Int64
+	runID  = time.Now().UnixNano()
+	seq    atomic.Int64
+	tokens = mustTokens()
 )
+
+func mustTokens() *auth.Service {
+	s, err := auth.New(auth.Config{
+		Secret: envOr("JWT_SECRET", "flashdeal-local-dev-secret-change-me!!"),
+		Issuer: envOr("JWT_ISSUER", "flashdeal"),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+func bearer(subject string, role auth.Role) string {
+	tok, err := tokens.Issue(subject, role, time.Hour)
+	if err != nil {
+		panic(err)
+	}
+	return "Bearer " + tok
+}
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -120,7 +142,8 @@ func createDeal(t *testing.T, stock int) int64 {
 	body := fmt.Sprintf(`{"product_id":%q,"title":"chaos","price_cents":100,"currency":"USD",`+
 		`"total_stock":%d,"per_user_limit":1,"starts_at":%q,"ends_at":%q}`,
 		unique("sku"), stock, now.Add(-time.Minute).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339))
-	r := call(t, http.MethodPost, "/v1/deals", body, nil)
+	admin := map[string]string{"Authorization": bearer("chaos-admin", auth.RoleAdmin)}
+	r := call(t, http.MethodPost, "/v1/deals", body, admin)
 	require.Equal(t, http.StatusCreated, r.status)
 	id := int64(r.body["id"].(float64))
 	activate(t, id)
@@ -129,7 +152,8 @@ func createDeal(t *testing.T, stock int) int64 {
 
 func activate(t *testing.T, dealID int64) {
 	t.Helper()
-	r := call(t, http.MethodPost, fmt.Sprintf("/v1/deals/%d/activate", dealID), "", nil)
+	admin := map[string]string{"Authorization": bearer("chaos-admin", auth.RoleAdmin)}
+	r := call(t, http.MethodPost, fmt.Sprintf("/v1/deals/%d/activate", dealID), "", admin)
 	require.Equal(t, http.StatusOK, r.status, "activate deal %d", dealID)
 }
 
@@ -206,7 +230,7 @@ func (l *load) reserveOnce() {
 	start := time.Now()
 	user := unique("user")
 	r, err := send(context.Background(), http.MethodPost, fmt.Sprintf("/v1/deals/%d/reservations", l.dealID), `{"quantity":1}`,
-		map[string]string{"X-User-ID": user, "Idempotency-Key": user})
+		map[string]string{"Authorization": bearer(user, auth.RoleUser), "Idempotency-Key": user})
 	outcome := fmt.Sprintf("%d %s", r.status, r.code)
 	switch {
 	case err != nil && refused(err):

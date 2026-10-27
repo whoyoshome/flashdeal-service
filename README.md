@@ -1,59 +1,124 @@
 # FlashDeal Service
 
-High-concurrency flash-sale API in Go. It sells a limited stock during a short
-window with **zero overselling** under heavy load.
+[![ci](https://github.com/whoyoshome/flashdeal-service/actions/workflows/ci.yml/badge.svg)](https://github.com/whoyoshome/flashdeal-service/actions/workflows/ci.yml)
 
-> **Status:** phase 7 (performance and resilience) complete. Reservations pass
-> an atomic Lua gate in Redis before reaching PostgreSQL. Abandoned holds
-> expire, the gate is reconciled from PostgreSQL, and the service is measured
-> under load and chaos. See the implementation plan in
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (section 7).
+A flash-sale API in Go that sells a limited stock to a crowd in seconds and
+**never oversells**. A Redis Lua script answers the 98 % of buyers who
+arrive too late in about half a millisecond (p50), and PostgreSQL stays the
+source of truth for the rest. The service is measured under load and chaos, with the
+numbers below.
 
-## Requirements
+## The problem
 
-- Go (version pinned in `go.mod`; the `toolchain` line is fetched automatically)
-- Docker with Compose v2
-- GNU make
-- `golangci-lint` v2 and `govulncheck` for `make lint`
-- On Windows, a C compiler (for example MinGW-w64) for `go test -race`
+A flash sale puts 1,000 units in front of 50,000 buyers who all arrive in
+the first seconds. Done naively, it goes wrong in several ways at once:
+
+| Problem                         | What goes wrong                                        | How FlashDeal handles it                                                                 |
+| ------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Overselling                     | Two requests read "1 left" and both sell               | An atomic Lua script in Redis, then a conditional `UPDATE` and a `CHECK` in PostgreSQL     |
+| Hot row                         | Every attempt queues for the lock on the deal's row     | The Redis gate rejects sold-out buyers in memory; only admitted buyers reach PostgreSQL  |
+| Thundering herd on reads        | Thousands of identical `GET /deals/{id}` hit the database | A 2 s Redis cache with `singleflight`                                                  |
+| Double purchase on retry        | A client times out, retries and buys twice              | `Idempotency-Key`: the original response is replayed, backed by a `UNIQUE` constraint    |
+| One buyer hoarding the stock    | A user reserves everything                              | A per-user limit checked in the same atomic script                                       |
+| Abandoned reservations          | Units held forever by buyers who never pay              | An expiry worker using `FOR UPDATE SKIP LOCKED`, safe on any number of replicas          |
+| Redis and PostgreSQL disagreeing | A lost update leaves the gate wrong                    | Compensation, plus a reconciler that repairs the gate from PostgreSQL                    |
+| Redis down                      | Selling without control                                 | Fail closed: `503` within milliseconds, nothing sold                                     |
+
+## How it works
+
+```mermaid
+flowchart TB
+    client["Client"] -->|"POST /v1/deals/:id/reservations<br/>Bearer JWT, Idempotency-Key"| mw
+
+    subgraph api["Go API"]
+        mw["chi middleware<br/>request ID, recover, trace, log, metrics,<br/>timeout, auth, idempotency"] --> reserve["Reserve use case"]
+    end
+
+    reserve -->|"1 read the deal"| cache[("Redis deal cache<br/>2 s, singleflight")]
+    reserve -->|"2 reserve.lua: stock<br/>and per-user limit"| gate[("Redis stock gate<br/>sold out: 409 in ~0.5 ms")]
+    reserve -->|"3 INSERT reservation +<br/>conditional UPDATE of the deal"| pg[("PostgreSQL<br/>source of truth, CHECK constraint")]
+
+    workers["Workers: expirer, reconciler, stock sampler"] --> gate
+    workers --> pg
+```
+
+A reservation goes through three steps:
+
+1. **Read the deal.** The deal comes from a short-lived cache. Concurrent
+   misses collapse into one database read.
+2. **Pass the gate.** One Redis round trip checks and decrements the stock
+   and the buyer's per-user limit atomically. A buyer who arrives too late
+   is answered `409 SOLD_OUT` here and never reaches PostgreSQL.
+3. **Write the reservation.** An admitted buyer's reservation is inserted
+   in PostgreSQL in the same transaction as a conditional `UPDATE` of the
+   deal's counters, guarded by `CHECK (reserved + sold <= total_stock)`. If
+   the write fails, the units go back to the gate.
+
+The reservation holds its units for 5 minutes. Confirming it creates the
+order. If it is not confirmed in time, the expirer returns the units.
+
+The code follows a strict inward dependency rule,
+`delivery → usecase → domain`, enforced by `depguard`. Adapters in
+`repository` implement small interfaces declared by the use cases, and
+`cmd/api/main.go` wires everything by hand.
+
+```text
+cmd/api/                composition root: config, wiring, startup and shutdown
+internal/domain/        entities and invariants (Deal, Reservation, Order), stdlib only
+internal/usecase/       business operations and the ports they need
+internal/delivery/      HTTP: chi router, middleware, DTOs, error mapping
+internal/repository/    adapters: postgres (pgx) and redisrepo (go-redis, Lua scripts)
+internal/worker/        expirer, reconciler and stock sampler
+internal/platform/      config, logging, clock, IDs, metrics and tracing
+migrations/             SQL schema
+api/openapi.yaml        HTTP contract
+deploy/                 Prometheus, Grafana, and Kubernetes manifests (probes, HPA)
+test/                   e2e, chaos and k6 load tests with their results
+```
 
 ## Quick start
 
-One command starts everything and runs a short flash sale against it: a deal
-of 1,000 units sold to about 20,000 buyers, then the links to watch it.
+You need Docker with Compose v2 and GNU make. One command starts the API,
+PostgreSQL, Redis, Jaeger, Prometheus and Grafana. It then runs a short
+flash sale against them: 1,000 units sold to about 20,000 buyers.
 
 ```bash
 make demo
 ```
 
-Then open the FlashDeal dashboard in Grafana at <http://localhost:3000>.
-`make demo` can be run again, and `make down` stops everything. Step by
-step:
+Then open the **FlashDeal - flash sale** dashboard at
+<http://localhost:3000> to watch the deal sell out. Run `make demo` again
+for another sale, and `make down` to stop everything.
+
+| Service    | URL                                  |
+| ---------- | ------------------------------------ |
+| API        | <http://localhost:8080>              |
+| Grafana    | <http://localhost:3000>              |
+| Prometheus | <http://localhost:9090>              |
+| Jaeger     | <http://localhost:16686>             |
+| pprof      | <http://localhost:6060/debug/pprof/> |
+
+Postgres, Redis, the API, pprof, Grafana, Prometheus and Jaeger bind to
+`127.0.0.1` on the host. To try the API by hand (Bearer JWTs; mint with
+`make token`):
 
 ```bash
-make up
-make migrate
-curl -i localhost:8080/readyz
-make down
+make up && make migrate
+ADMIN=$(TOKEN_ROLE=admin TOKEN_SUB=ops make token)
+USER=$(TOKEN_SUB=alice TOKEN_ROLE=user make token)
+curl -s -X POST localhost:8080/v1/deals -H "Authorization: Bearer $ADMIN" \
+  -H 'Content-Type: application/json' \
+  -d '{"product_id":"sku-1","title":"Headphones","price_cents":4999,"currency":"USD","total_stock":3,"per_user_limit":1,"starts_at":"2026-01-01T00:00:00Z","ends_at":"2030-01-01T00:00:00Z"}'
+# Use the "id" returned above: 1 on a fresh database.
+curl -s -X POST localhost:8080/v1/deals/1/activate -H "Authorization: Bearer $ADMIN"
+curl -s -X POST localhost:8080/v1/deals/1/reservations -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $USER" -H 'Idempotency-Key: alice-1' -d '{"quantity":1}'
 ```
 
-`make up` builds the API image and starts PostgreSQL, Redis, the API and the
-observability stack, waiting until they are healthy. `make migrate` applies
-the SQL schema in [`migrations/`](migrations).
-
-| Service    | URL                                           |
-| ---------- | --------------------------------------------- |
-| API        | <http://localhost:8080>                         |
-| Grafana    | <http://localhost:3000> (FlashDeal dashboard)   |
-| Prometheus | <http://localhost:9090>                         |
-| Jaeger     | <http://localhost:16686>                        |
-| pprof      | <http://localhost:6060/debug/pprof/>            |
-
-Everything except the API is bound to `127.0.0.1`. `make up PROFILES=`
-starts only the API, PostgreSQL and Redis.
-
-`make test-integration` starts a disposable PostgreSQL with testcontainers, so
-Docker must be running.
+To develop, you also need Go (the version is pinned in `go.mod`, and the
+`toolchain` line downloads it automatically). `make lint` needs
+`golangci-lint` v2 and `govulncheck`. On Windows, `go test -race` needs a C
+compiler such as MinGW-w64.
 
 ## Results
 
@@ -182,147 +247,273 @@ while the units are written
 - [Phase 7: the write path, profiled and fixed](test/load/results/write-path.md)
 - [Phase 7: chaos under load](test/load/results/chaos.md)
 
-## Endpoints
+## Design decisions
+
+The full design, in Spanish, is in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Each decision that is not
+obvious has an architecture decision record:
+
+| ADR | Decision |
+| --- | -------- |
+| [0001](docs/adr/0001-redis-stock-gate.md) | A Redis Lua script gates stock before PostgreSQL |
+| [0002](docs/adr/0002-manual-dependency-injection.md) | Wire dependencies by hand in `main` (no Wire, no Fx) |
+| [0003](docs/adr/0003-idempotent-reservation-create.md) | Idempotent reservation insert (`ON CONFLICT DO NOTHING`) |
+| [0004](docs/adr/0004-singleflight-in-repository-adapters.md) | Allow `golang.org/x/sync` (`singleflight`) in repository adapters |
+| [0005](docs/adr/0005-stock-gate-reconciliation.md) | Reconcile the gate only on stable drift, with compare-and-set |
+| [0006](docs/adr/0006-asynchronous-commit-for-reservations.md) | Commit reservation transactions asynchronously |
+| [0007](docs/adr/0007-fail-fast-redis-client.md) | Fail fast when Redis is down: no client retries |
+| [0008](docs/adr/0008-jwt-authentication.md) | Bearer JWT (HS256) with `user` / `admin` roles |
+
+## Technical overview
+
+| Area | Implementation |
+| --- | --- |
+| Go backend & Clean Architecture | `delivery → usecase → domain`, enforced by `depguard` |
+| HTTP/REST | Versioned `/v1` API, OpenAPI 3.1, stable error codes |
+| AuthN / AuthZ (JWT) | Bearer HS256, `sub` + `role`; admin routes require `admin` ([ADR 0008](docs/adr/0008-jwt-authentication.md)) |
+| Distributed correctness | Redis Lua gate + PostgreSQL `CHECK`, compensation, reconciler |
+| Observability | `slog` JSON, Prometheus business metrics, OpenTelemetry → Jaeger, pprof |
+| CI/CD | GitHub Actions: lint, `govulncheck`, unit, integration, e2e, image; Dependabot |
+| Containers & Kubernetes | Multi-stage distroless image; manifests under [`deploy/k8s/`](deploy/k8s/) (Deployment, probes, HPA) |
+
+## API
 
 The full contract is in [`api/openapi.yaml`](api/openapi.yaml). Every error
-uses the body `{"code", "message", "request_id"}`.
+uses the body `{"code", "message", "request_id"}`, and clients may branch on
+`code`. Authenticated routes expect `Authorization: Bearer <JWT>`.
 
 | Method   | Path                            | Purpose                                                        |
 | -------- | ------------------------------- | -------------------------------------------------------------- |
-| `POST`   | `/v1/deals`                     | Create a deal (admin)                                          |
-| `POST`   | `/v1/deals/{id}/activate`       | Open a deal's stock for reservations (admin)                  |
+| `POST`   | `/v1/deals`                     | Create a deal (`role=admin`)                                   |
+| `POST`   | `/v1/deals/{id}/activate`       | Open a deal's stock for reservations (`role=admin`)            |
 | `GET`    | `/v1/deals/{id}`                | Get a deal with its approximate available stock                |
 | `GET`    | `/v1/deals?status=active`       | List active deals (cursor pagination)                          |
-| `POST`   | `/v1/deals/{id}/reservations`   | Reserve units; needs `X-User-ID` and `Idempotency-Key`         |
-| `POST`   | `/v1/reservations/{id}/confirm` | Confirm a reservation and create its order (`X-User-ID`)       |
-| `DELETE` | `/v1/reservations/{id}`         | Cancel a pending reservation (`X-User-ID`)                     |
+| `POST`   | `/v1/deals/{id}/reservations`   | Reserve units; needs Bearer JWT and `Idempotency-Key`          |
+| `POST`   | `/v1/reservations/{id}/confirm` | Confirm a reservation and create its order                     |
+| `DELETE` | `/v1/reservations/{id}`         | Cancel a pending reservation                                   |
 | `GET`    | `/healthz`                      | Liveness: the process is up (never checks dependencies)        |
 | `GET`    | `/readyz`                       | Readiness: PostgreSQL and Redis are reachable (`200` or `503`) |
-| `GET`    | `/metrics`                      | Prometheus metrics (see [Observability](#observability))       |
+| `GET`    | `/metrics`                      | Prometheus metrics                                             |
 
-### Behavior notes and known limitations
+Behavior worth knowing:
 
-- A deal must be **activated** (`POST /v1/deals/{id}/activate`) before it can
-  be reserved: activation loads its stock into the Redis gate.
-- The per-user limit is cumulative across a user's reservations on a deal and
-  holds under parallel requests (enforced atomically in Redis).
-- If Redis is unreachable, reservations fail closed with `503
-  STOCK_UNAVAILABLE` within milliseconds (the Redis client never retries,
-  [ADR 0007](docs/adr/0007-fail-fast-redis-client.md)); nothing is sold
-  without the gate, and sales resume when Redis returns. `make test-chaos`
-  proves it under load ([results](test/load/results/chaos.md)).
-- Reservations are idempotent per user and `Idempotency-Key`: a retry replays
-  the original response (marked `Idempotency-Replayed: true`) for 24 h, and a
-  retry while the first request is still running gets `409
-  IDEMPOTENCY_IN_PROGRESS`.
-- Admin endpoints (`POST /v1/deals`, `/activate`) are not authenticated yet.
-- `X-User-ID` stands in for real authentication; the middleware is the seam
-  where JWT validation will go.
-- Unconfirmed reservations expire after `RESERVATION_TTL` (5 min); the
-  expirer returns their units within `EXPIRE_EVERY`.
-- Successful reservations of one deal still serialize on its `deals` row:
-  about 2,000 per second locally, after reservation transactions moved to
-  asynchronous commit ([ADR 0006](docs/adr/0006-asynchronous-commit-for-reservations.md);
-  [results](test/load/results/write-path.md)). A PostgreSQL crash can lose
-  the last few hundred milliseconds of reservations, never orders and never
-  into an oversell.
+- **Activation.** A deal must be activated before it can be reserved:
+  activation loads its stock into the Redis gate. Activating again is
+  harmless.
+- **Per-user limit.** It is cumulative across a user's reservations on a
+  deal and holds under parallel requests.
+- **Idempotency.** Reservations are idempotent per user and
+  `Idempotency-Key`. A retry replays the original response, marked
+  `Idempotency-Replayed: true`, for 24 h. A retry while the first request is
+  still running gets `409 IDEMPOTENCY_IN_PROGRESS`, and the same key with a
+  different body gets `409 CONFLICT`.
+- **Overload.** A request that runs out of time is rolled back and answered
+  `503 REQUEST_TIMEOUT` with `Retry-After: 1`, which is safe to retry with
+  the same key. With Redis down, reservations get `503 STOCK_UNAVAILABLE`.
 
-## Make targets
+## Running it
 
-| Target                  | What it does                                            |
-| ----------------------- | ------------------------------------------------------- |
-| `make demo`             | Start everything and run a short flash sale to watch    |
-| `make up` / `make down` | Start / stop the local stack                            |
-| `make migrate`          | Apply database migrations (golang-migrate container)    |
-| `make test`             | Unit tests with the race detector                       |
-| `make test-integration` | Integration tests against real Postgres and Redis       |
-| `make test-e2e`         | End-to-end tests over HTTP against the running stack     |
-| `make test-chaos`       | Stop Redis and the API under load; check 503s, no oversell and a clean exit |
-| `make lint`             | `golangci-lint` (including layer rules) + `govulncheck` |
-| `make lint-api`         | Validate `api/openapi.yaml` with Redocly (Docker)        |
-| `make load`             | k6 flash-sale scenario against the running stack        |
-| `make build`            | Build the binary into `bin/`                            |
+### Configuration
 
-## Configuration
+All configuration comes from environment variables, loaded and validated
+once at startup. [`.env.example`](.env.example) lists every variable with
+its default. The ones that shape behavior:
 
-All configuration comes from environment variables; see
-[`.env.example`](.env.example) for the full list and defaults.
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `RESERVATION_TTL` | `5m` | How long a reservation holds its units |
+| `REQUEST_TIMEOUT` | `5s` | Time budget of every `/v1` request |
+| `IDEMPOTENCY_TTL` | `24h` | How long a reservation response is replayed |
+| `DEAL_CACHE_TTL` | `2s` | Age of the cached deal snapshot |
+| `EXPIRE_EVERY`, `EXPIRE_BATCH_SIZE` | `5s`, `100` | Expirer pace and batch |
+| `RECONCILE_EVERY` | `30s` | Reconciler pace; must exceed `REQUEST_TIMEOUT` by more than 5 s |
+| `STOCK_SAMPLE_EVERY` | `5s` | How often `stock_remaining` is published |
+| `TRACING_OTLP_ENDPOINT`, `TRACING_SAMPLE_RATIO` | empty, `1` | OTLP/HTTP collector (empty disables tracing) and share of traces kept |
+| `ADMIN_ADDR` | `:6060` | pprof listener; never expose it |
 
-## Background workers
+### Background workers
 
 Workers run inside the API process, share its lifecycle and stop with it
-on `SIGTERM`. Every replica runs them; they need no leader election.
+on `SIGTERM`. Every replica runs them, with no leader election.
 
-- **Expirer** (`EXPIRE_EVERY`, default 5s): marks pending reservations
-  past their TTL as `expired` and returns their units to the deal and to
-  the Redis gate. Batches of `EXPIRE_BATCH_SIZE` rows are claimed with
+- **Expirer.** It marks reservations past their TTL as `expired` and returns
+  their units to the deal and to the gate. It claims batches with
   `FOR UPDATE SKIP LOCKED`, so replicas never process the same row.
-- **Reconciler** (`RECONCILE_EVERY`, default 30s): compares the Redis gate
-  of every active deal with PostgreSQL and, when a release was lost,
-  restores the stock and the per-buyer holdings from PostgreSQL. It only
-  repairs a disagreement that stood still for two consecutive passes, with
-  a compare-and-set, so it never fights an operation in flight. Repairs are
-  logged as `stock gate drift repaired`. See
-  [ADR 0005](docs/adr/0005-stock-gate-reconciliation.md).
-- **Stock sampler** (`STOCK_SAMPLE_EVERY`, default 5s): publishes the units
-  left in the gate for every active deal as `stock_remaining{deal_id}`.
+- **Reconciler.** It repairs the Redis gate from PostgreSQL after a lost
+  update. It acts only on a disagreement that stood still for two passes,
+  and it uses a compare-and-set, so it never fights a request in flight
+  ([ADR 0005](docs/adr/0005-stock-gate-reconciliation.md)).
+- **Stock sampler.** It publishes the units left in the gate per active deal
+  as `stock_remaining{deal_id}`.
 
-## Observability
+### Observability
 
-`GET /metrics` serves Prometheus metrics:
+**Metrics.** `GET /metrics` serves Prometheus metrics:
 
-| Metric                                     | What it shows                                                   |
-| ------------------------------------------ | --------------------------------------------------------------- |
-| `http_requests_total{method,route,status}` | Traffic per route pattern and status                            |
-| `http_request_duration_seconds{method,route}` | Latency histogram per route pattern                          |
-| `reservations_total{result}`               | Reservation attempts: `created`, `sold_out`, `user_limit_reached`, `request_timeout`, ... |
-| `stock_remaining{deal_id}`                 | Units left in the Redis gate per active deal                    |
-| `reservations_expired_total`               | Reservations returned to stock by the expirer                   |
-| `stock_gate_repairs_total`                 | Gates corrected by the reconciler (each one is a lost update)   |
-| `db_pool_*`                                | PostgreSQL pool usage and time spent waiting for a connection   |
+| Metric | What it shows |
+| ------ | ------------- |
+| `http_requests_total{method,route,status}` | Traffic per route pattern and status |
+| `http_request_duration_seconds{method,route}` | Latency histogram per route pattern |
+| `reservations_total{result}` | Reservation attempts: `created`, `sold_out`, `user_limit_reached`, `request_timeout`, ... |
+| `stock_remaining{deal_id}` | Units left in the Redis gate per active deal |
+| `reservations_expired_total` | Reservations returned to stock by the expirer |
+| `stock_gate_repairs_total` | Gates corrected by the reconciler (each one is a lost update) |
+| `db_pool_*` | PostgreSQL pool usage and time spent waiting for a connection |
 
-Profiling (`net/http/pprof`) is served on a separate admin listener,
-`ADMIN_ADDR` (default `:6060`), which Docker Compose publishes on
-`127.0.0.1` only. For example, a 10-second CPU profile:
+**Dashboard.** Grafana opens on the **FlashDeal - flash sale** dashboard. It
+is versioned in
+[`deploy/grafana/dashboards/flashdeal.json`](deploy/grafana/dashboards/flashdeal.json)
+and provisioned read-only, so edit the JSON, not the UI. It shows:
+
+- stock left per deal;
+- reservation outcomes and the sold-out share;
+- request timeouts and gate repairs;
+- p99 latency and status per route;
+- the PostgreSQL pool, including time spent waiting for a connection.
+
+Locally, Prometheus scrapes every second and Compose samples the stock
+every second, because a deal's gate empties in under a second.
+
+**Tracing.** With `TRACING_OTLP_ENDPOINT` set, OpenTelemetry traces cover:
+
+- each `/v1` request, named after its route and continuing a W3C
+  `traceparent`;
+- each PostgreSQL query, with parameterized SQL only;
+- each Redis command;
+- each worker pass.
+
+Compose sends them to Jaeger and keeps 10 % of new traces. Log lines
+written during a traced request carry its `trace_id`.
+
+**Profiling.** `pprof` is served on the admin listener. For example, a
+10-second CPU profile:
 
 ```bash
 go tool pprof "http://localhost:6060/debug/pprof/profile?seconds=10"
 ```
 
-### Dashboard
+## Testing
 
-Grafana opens on the **FlashDeal - flash sale** dashboard, versioned in
-[`deploy/grafana/dashboards/flashdeal.json`](deploy/grafana/dashboards/flashdeal.json)
-(provisioned read-only: edit the JSON, not the UI). It shows the stock left
-in the gate per deal, reservation outcomes, the sold-out share, request
-timeouts, gate repairs, p99 latency and status per route, the PostgreSQL
-pool and time spent waiting for a connection. Prometheus scrapes the API
-every second, and Compose samples the stock every second too
-([`deploy/prometheus.yml`](deploy/prometheus.yml)): a deal's gate empties in
-under a second. Run `make
-load` with the stack up to watch a deal sell out.
+| Target | What it does |
+| ------ | ------------ |
+| `make test` | Unit tests with the race detector: table-driven, hand-written fakes, fake clock |
+| `make test-integration` | Repositories against real PostgreSQL and Redis (testcontainers), including the concurrency invariants: no oversell, per-user limit, idempotency, `SKIP LOCKED` |
+| `make test-e2e` | The running stack over HTTP, as a client would use it |
+| `make test-chaos` | Stops Redis and then the API under load; checks `503`s, no oversell and a clean exit |
+| `make load` | The k6 flash-sale scenario; fails when a design target is missed |
+| `make lint` | `golangci-lint`, including the layer rules, plus `govulncheck` |
+| `make lint-api` | Validates `api/openapi.yaml` with Redocly |
 
-### Tracing
+CI runs lint, unit, integration and end-to-end tests on every pull request.
 
-With `TRACING_OTLP_ENDPOINT` set (an OTLP/HTTP collector such as Jaeger;
-Docker Compose points it at `http://jaeger:4318` and samples 10 % of new
-traces), the service exports OpenTelemetry traces:
+## Known limitations and next steps
 
-- one server span per `/v1` request, named after its route
-  (`POST /v1/deals/{id}/reservations`), continuing the caller's trace when
-  the request carries a W3C `traceparent` header;
-- one client span per PostgreSQL query (`db.query.text` holds the
-  parameterized SQL; values are never recorded) and per Redis command or
-  pipeline;
-- one span per worker pass (`worker.expire`, `worker.reconcile`,
-  `worker.sample_stock`).
+Limitations, all documented where they are decided:
 
-`TRACING_SAMPLE_RATIO` (default `1`) is the share of new traces kept.
-Requests inside a sampled trace are always kept. Log lines written during a
-traced request carry its `trace_id` and `span_id`. With no endpoint, tracing
-is off and costs nothing.
+- **Reservation latency target missed.** Successful reservations miss the
+  50 ms p99 target on a laptop: 86 ms in scenario B. One deal is one row,
+  which accepts about 2,000 writes per second.
+- **Durability window.** Reservations commit asynchronously. A PostgreSQL
+  crash can lose the last few hundred milliseconds of holds, never orders
+  and never into an oversell
+  ([ADR 0006](docs/adr/0006-asynchronous-commit-for-reservations.md)).
+- **Per-user limit only in Redis.** In a narrow failure case a buyer could
+  exceed the limit
+  ([ADR 0005](docs/adr/0005-stock-gate-reconciliation.md)).
+- **Redis restart without its data.** The service fails closed until the
+  deals are activated again. Activation is idempotent; the reconciler does
+  not reload the gate on its own.
+- **JWT is HS256 with a shared secret.** Fine for a self-contained demo;
+  production would verify tokens from an OIDC IdP (JWKS / RS256) behind the
+  same `platform/auth` boundary
+  ([ADR 0008](docs/adr/0008-jwt-authentication.md)).
+- **Payments are simulated.** Confirmation assumes the payment succeeded.
+- **One replica measured.** Load was measured on one replica on a shared
+  4-CPU VM. Replicas are stateless by design; K8s manifests include an HPA,
+  but no multi-replica load test has been run yet.
 
-## Project layout and rules
+Next steps:
 
-- Design and rationale: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (Spanish)
-- Engineering rules for contributors and coding agents: [`CLAUDE.md`](CLAUDE.md)
+1. **Stock shards.** Split a deal's counters over several rows to raise
+   per-deal write throughput and bring the reservation p99 under target.
+2. **OIDC / JWKS verification** against a real IdP (OAuth 2.0 / OpenID Connect).
+3. **A transactional outbox** to publish `order.confirmed` events.
+4. **Per-user rate limiting** with a token bucket in Redis.
+5. **Multi-replica load test** on the Kubernetes deployment.
+
+## How I Used AI
+
+This project was built with [Claude Code](https://claude.com/claude-code),
+Anthropic's coding agent. I used it as a pair programmer that writes most of
+the code, while I own the design, the decisions and what gets merged.
+
+**What I gave it.** The project started from two documents:
+
+- **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md):** the design, the
+  stack, the layer rules and an eight-phase plan.
+- **[`CLAUDE.md`](CLAUDE.md):** the engineering rules every change must
+  follow. Dependencies point inward, no ORM, no `float64` money, and
+  concurrency correctness lives only in Lua scripts and SQL constraints. It
+  also says what needs my approval before it happens: a new dependency, a
+  schema change, a change to the API contract, or more than about eight
+  files touched.
+
+**What I delegated.** I delegated the implementation of every phase:
+
+- the domain, the use cases, the adapters, the HTTP layer and the workers;
+- the unit, integration, end-to-end and chaos tests;
+- the k6 scenarios and the measurements;
+- the observability stack and dashboard;
+- the ADRs, results files and pull request descriptions.
+
+That came to 19 pull requests, each one phase or part of one.
+
+**How I kept control.**
+
+- **One phase at a time,** each starting with a written plan that I
+  approved or changed.
+- **Decisions stayed mine.** For example:
+  - answering overloaded requests with a retryable `503 REQUEST_TIMEOUT`
+    instead of `500`;
+  - how idempotency behaves while a request is still in progress;
+  - allowing `singleflight` in the adapters (ADR 0004);
+  - accepting the reconciler's residual risk (ADR 0005);
+  - trading a durability window for 4× write throughput (ADR 0006);
+  - making the Redis client fail fast after the chaos test exposed slow
+    failures (ADR 0007);
+  - every dependency added.
+- **Every pull request passed CI before I merged it:** lint, `govulncheck`,
+  race-enabled unit tests, integration and end-to-end tests. Merges were
+  fast-forward only.
+- **The design targets in `make load` stay as written.** The tests were
+  never weakened to get to green: where a target is missed, the README says
+  so.
+
+**What was caught and corrected along the way.** Most problems were found
+by measuring and testing, not by reading code:
+
+- **A pull request whose intermediate commit did not build.** I approved
+  rewriting its branch history, and since then every commit is built on its
+  own before it is pushed.
+- **Phantom reservations under load.** A k6 run found reservations that
+  committed while their clients received an error: `COMMIT` used the
+  request's context. It now runs detached from it.
+- **Spans that were never exported.** A manual check against Jaeger found
+  that the OTLP exporter posted to the wrong path. A test now pins the
+  path.
+- **Misleading dashboard numbers.** Watching the dashboard during a load
+  test showed 305 reservations for a sale of 1,000, and panels failing while
+  Grafana replaced its own plugins at startup. Both were fixed.
+- **Slow failures with Redis down.** The chaos test showed that failing
+  closed took 5 s per request, because of the Redis client's retries.
+- **Vulnerable dependencies and toolchain.** `govulncheck` flagged them
+  three times, and each was upgraded before merging.
+
+The lesson I take from it: an agent is fast at writing code, so the leverage
+is in the guardrails around it. That means written rules, small reviewed
+steps, CI, and tests and load runs that measure the claims instead of
+trusting them.
+
+## License
+
+[MIT](LICENSE)

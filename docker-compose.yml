@@ -13,7 +13,7 @@ services:
       POSTGRES_PASSWORD: flashdeal
       POSTGRES_DB: flashdeal
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -25,7 +25,7 @@ services:
   redis:
     image: redis:7.4-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -39,6 +39,9 @@ services:
       LOG_LEVEL: info
       POSTGRES_URL: *postgres-url
       REDIS_ADDR: redis:6379
+      # Local/dev HMAC key (also used by make token, k6, e2e). Never reuse in prod.
+      JWT_SECRET: ${JWT_SECRET:-flashdeal-local-dev-secret-change-me!!}
+      JWT_ISSUER: ${JWT_ISSUER:-flashdeal}
       # CI sets the endpoint empty: it runs without the observability profile.
       # Sampling a tenth of new traces keeps a k6 burst from flooding Jaeger.
       TRACING_OTLP_ENDPOINT: ${TRACING_OTLP_ENDPOINT-http://jaeger:4318}
@@ -46,9 +49,15 @@ services:
       # Matches Prometheus' 1s scrape (deploy/prometheus.yml).
       STOCK_SAMPLE_EVERY: 1s
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
       # pprof; bound to the host's loopback so it is never exposed.
       - "127.0.0.1:6060:6060"
+    healthcheck:
+      test: ["CMD", "/flashdeal", "healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
     depends_on:
       postgres:
         condition: service_healthy

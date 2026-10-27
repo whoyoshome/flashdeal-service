@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/whoyoshome/flashdeal-service/internal/delivery/httpapi/middleware"
+	"github.com/whoyoshome/flashdeal-service/internal/platform/auth"
 )
 
 type errorBody struct {
@@ -182,29 +183,39 @@ func TestTimeout(t *testing.T) {
 func TestAuth(t *testing.T) {
 	t.Parallel()
 
-	var seen string
-	h := middleware.RequestID(middleware.Auth(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		seen = middleware.UserIDFrom(r.Context())
+	tokens := testAuth(t)
+	var seenUser string
+	var seenRole auth.Role
+	h := middleware.RequestID(middleware.Auth(tokens)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		seenUser = middleware.UserIDFrom(r.Context())
+		seenRole = middleware.RoleFrom(r.Context())
 	})))
 
-	t.Run("passes the user id to the handler", func(t *testing.T) {
-		rec := serve(t, h, newRequest(t, map[string]string{middleware.UserIDHeader: "user-42"}))
+	t.Run("passes the subject and role to the handler", func(t *testing.T) {
+		rec := serve(t, h, newRequest(t, map[string]string{
+			"Authorization": bearer(t, tokens, "user-42", auth.RoleUser),
+		}))
 
 		require.Equal(t, http.StatusOK, rec.Code)
-		require.Equal(t, "user-42", seen)
+		require.Equal(t, "user-42", seenUser)
+		require.Equal(t, auth.RoleUser, seenRole)
 	})
 
 	rejected := []struct {
-		name string
-		id   string
+		name   string
+		header string
 	}{
-		{name: "rejects a missing header", id: ""},
-		{name: "rejects an id with spaces", id: "user 42"},
-		{name: "rejects an id longer than the limit", id: strings.Repeat("u", 129)},
+		{name: "rejects a missing header", header: ""},
+		{name: "rejects a non-bearer scheme", header: "Basic abc"},
+		{name: "rejects garbage", header: "Bearer not.a.jwt"},
 	}
 	for _, tc := range rejected {
 		t.Run(tc.name+" with 401", func(t *testing.T) {
-			rec := serve(t, h, newRequest(t, map[string]string{middleware.UserIDHeader: tc.id}))
+			headers := map[string]string{}
+			if tc.header != "" {
+				headers["Authorization"] = tc.header
+			}
+			rec := serve(t, h, newRequest(t, headers))
 
 			require.Equal(t, http.StatusUnauthorized, rec.Code)
 			var body errorBody
@@ -216,5 +227,32 @@ func TestAuth(t *testing.T) {
 
 	t.Run("returns an empty user outside the middleware", func(t *testing.T) {
 		require.Empty(t, middleware.UserIDFrom(context.Background()))
+		require.Empty(t, middleware.RoleFrom(context.Background()))
+	})
+}
+
+func TestRequireAdmin(t *testing.T) {
+	t.Parallel()
+
+	tokens := testAuth(t)
+	h := middleware.Auth(tokens)(middleware.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
+
+	t.Run("allows an admin token", func(t *testing.T) {
+		rec := serve(t, h, newRequest(t, map[string]string{
+			"Authorization": bearer(t, tokens, "ops", auth.RoleAdmin),
+		}))
+		require.Equal(t, http.StatusNoContent, rec.Code)
+	})
+
+	t.Run("rejects a user token with 403", func(t *testing.T) {
+		rec := serve(t, h, newRequest(t, map[string]string{
+			"Authorization": bearer(t, tokens, "ops", auth.RoleUser),
+		}))
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		var body errorBody
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		require.Equal(t, "FORBIDDEN", body.Code)
 	})
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/whoyoshome/flashdeal-service/internal/delivery/httpapi/middleware"
 	"github.com/whoyoshome/flashdeal-service/internal/domain"
+	"github.com/whoyoshome/flashdeal-service/internal/platform/auth"
 	"github.com/whoyoshome/flashdeal-service/internal/usecase"
 )
 
@@ -96,16 +97,18 @@ func (h *idemHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
-func newIdemChain(store usecase.IdempotencyStore, next http.Handler) http.Handler {
+func newIdemChain(t *testing.T, store usecase.IdempotencyStore, next http.Handler) http.Handler {
+	t.Helper()
 	cfg := middleware.IdempotencyConfig{LockTTL: 10 * time.Second, ResponseTTL: 24 * time.Hour}
 	log := slog.New(slog.DiscardHandler)
-	return middleware.RequestID(middleware.Recoverer(log)(middleware.Auth(middleware.Idempotency(store, cfg, log)(next))))
+	tokens := testAuth(t)
+	return middleware.RequestID(middleware.Recoverer(log)(middleware.Auth(tokens)(middleware.Idempotency(store, cfg, log)(next))))
 }
 
 func idemRequest(t *testing.T, user, key, body string) *http.Request {
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/deals/7/reservations", strings.NewReader(body))
-	req.Header.Set(middleware.UserIDHeader, user)
+	req.Header.Set("Authorization", bearer(t, testAuth(t), user, auth.RoleUser))
 	if key != "" {
 		req.Header.Set(middleware.IdempotencyKeyHeader, key)
 	}
@@ -118,7 +121,7 @@ func TestIdempotency(t *testing.T) {
 	t.Run("runs the first request and replays the stored response on a retry", func(t *testing.T) {
 		t.Parallel()
 		store, h := newFakeIdemStore(), &idemHandler{status: http.StatusCreated}
-		chain := newIdemChain(store, h)
+		chain := newIdemChain(t, store, h)
 
 		first := serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":1}`))
 		retry := serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":1}`))
@@ -134,7 +137,7 @@ func TestIdempotency(t *testing.T) {
 	t.Run("replays a final 4xx such as SOLD_OUT", func(t *testing.T) {
 		t.Parallel()
 		store, h := newFakeIdemStore(), &idemHandler{status: http.StatusConflict}
-		chain := newIdemChain(store, h)
+		chain := newIdemChain(t, store, h)
 
 		serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":1}`))
 		retry := serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":1}`))
@@ -146,7 +149,7 @@ func TestIdempotency(t *testing.T) {
 	t.Run("does not store a 5xx, so the retry runs again", func(t *testing.T) {
 		t.Parallel()
 		store, h := newFakeIdemStore(), &idemHandler{status: http.StatusServiceUnavailable}
-		chain := newIdemChain(store, h)
+		chain := newIdemChain(t, store, h)
 
 		serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":1}`))
 		serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":1}`))
@@ -159,7 +162,7 @@ func TestIdempotency(t *testing.T) {
 	t.Run("rejects the same key with a different body with 409 CONFLICT", func(t *testing.T) {
 		t.Parallel()
 		store, h := newFakeIdemStore(), &idemHandler{status: http.StatusCreated}
-		chain := newIdemChain(store, h)
+		chain := newIdemChain(t, store, h)
 		serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":1}`))
 
 		rec := serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":2}`))
@@ -174,7 +177,7 @@ func TestIdempotency(t *testing.T) {
 	t.Run("scopes keys per user", func(t *testing.T) {
 		t.Parallel()
 		store, h := newFakeIdemStore(), &idemHandler{status: http.StatusCreated}
-		chain := newIdemChain(store, h)
+		chain := newIdemChain(t, store, h)
 
 		serve(t, chain, idemRequest(t, "alice", "shared-key", `{"quantity":1}`))
 		bob := serve(t, chain, idemRequest(t, "bob", "shared-key", `{"quantity":1}`))
@@ -188,7 +191,7 @@ func TestIdempotency(t *testing.T) {
 		t.Parallel()
 		store := newFakeIdemStore()
 		h := &idemHandler{status: http.StatusCreated, block: make(chan struct{})}
-		chain := newIdemChain(store, h)
+		chain := newIdemChain(t, store, h)
 
 		var wg sync.WaitGroup
 		var first *httptest.ResponseRecorder
@@ -215,7 +218,7 @@ func TestIdempotency(t *testing.T) {
 	t.Run("releases the claim when the handler panics", func(t *testing.T) {
 		t.Parallel()
 		store, h := newFakeIdemStore(), &idemHandler{status: http.StatusCreated, panics: true}
-		chain := newIdemChain(store, h)
+		chain := newIdemChain(t, store, h)
 
 		rec := serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":1}`))
 
@@ -227,7 +230,7 @@ func TestIdempotency(t *testing.T) {
 	t.Run("passes requests without a key straight through", func(t *testing.T) {
 		t.Parallel()
 		store, h := newFakeIdemStore(), &idemHandler{status: http.StatusBadRequest}
-		chain := newIdemChain(store, h)
+		chain := newIdemChain(t, store, h)
 
 		rec := serve(t, chain, idemRequest(t, "alice", "", `{"quantity":1}`))
 
@@ -240,7 +243,7 @@ func TestIdempotency(t *testing.T) {
 		t.Parallel()
 		store, h := newFakeIdemStore(), &idemHandler{status: http.StatusCreated}
 		store.err = errors.New("dial tcp: connection refused")
-		chain := newIdemChain(store, h)
+		chain := newIdemChain(t, store, h)
 
 		rec := serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":1}`))
 
@@ -254,7 +257,7 @@ func TestIdempotency(t *testing.T) {
 	t.Run("rejects a body larger than the limit with 400", func(t *testing.T) {
 		t.Parallel()
 		store, h := newFakeIdemStore(), &idemHandler{status: http.StatusCreated}
-		chain := newIdemChain(store, h)
+		chain := newIdemChain(t, store, h)
 
 		rec := serve(t, chain, idemRequest(t, "alice", "k1", strings.Repeat("x", 70_000)))
 
@@ -271,7 +274,7 @@ func TestIdempotency(t *testing.T) {
 			got = b.String()
 			w.WriteHeader(http.StatusCreated)
 		})
-		chain := newIdemChain(newFakeIdemStore(), next)
+		chain := newIdemChain(t, newFakeIdemStore(), next)
 
 		serve(t, chain, idemRequest(t, "alice", "k1", `{"quantity":3}`))
 
