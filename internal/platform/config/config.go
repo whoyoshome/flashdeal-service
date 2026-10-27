@@ -65,13 +65,17 @@ type Config struct {
 	Auth     Auth     `envPrefix:"JWT_"`
 }
 
-// Auth configures JWT verification (HS256). Tokens are issued by an IdP in
-// production; locally by `make token` / cmd/token with the same secret.
+// Auth configures JWT verification. Local Compose uses HS256 (Secret);
+// production can set JWKSURL for RS256 keys from an OIDC IdP.
 type Auth struct {
-	// Secret is the HMAC key. Never log it. Required; at least 32 bytes.
-	Secret string `env:"SECRET,required,notEmpty"`
+	// Secret is the HS256 HMAC key. Required when JWKSURL is empty; at least
+	// 32 bytes. Never log it.
+	Secret string `env:"SECRET"`
 	// Issuer must match the iss claim on every accepted token.
 	Issuer string `env:"ISSUER" envDefault:"flashdeal"`
+	// JWKSURL, when set, selects RS256 verification against that JWKS
+	// document instead of HS256. Example: https://idp/.well-known/jwks.json.
+	JWKSURL string `env:"JWKS_URL"`
 }
 
 // Postgres configures the pgx connection pool.
@@ -187,11 +191,14 @@ func (c Config) validate() error {
 	if c.Redis.PoolSize <= 0 {
 		errs = append(errs, errors.New("REDIS_POOL_SIZE must be positive"))
 	}
-	if len(c.Auth.Secret) < 32 {
-		errs = append(errs, errors.New("JWT_SECRET must be at least 32 bytes"))
-	}
 	if c.Auth.Issuer == "" {
 		errs = append(errs, errors.New("JWT_ISSUER is required"))
+	}
+	switch {
+	case c.Auth.JWKSURL != "":
+		// RS256 via JWKS: HMAC secret is unused for verification.
+	case len(c.Auth.Secret) < 32:
+		errs = append(errs, errors.New("JWT_SECRET must be at least 32 bytes when JWT_JWKS_URL is empty"))
 	}
 	if c.RateLimitRPS < 0 {
 		errs = append(errs, errors.New("RATE_LIMIT_RPS must be >= 0"))

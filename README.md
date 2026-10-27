@@ -277,6 +277,7 @@ obvious has an architecture decision record:
 | [0007](docs/adr/0007-fail-fast-redis-client.md) | Fail fast when Redis is down: no client retries |
 | [0008](docs/adr/0008-jwt-authentication.md) | Bearer JWT (HS256) with `user` / `admin` roles |
 | [0009](docs/adr/0009-per-user-rate-limiting.md) | Per-subject Redis token bucket on authenticated routes |
+| [0010](docs/adr/0010-oidc-jwks-verification.md) | Optional RS256 verification against an OIDC JWKS URL |
 
 ## Technical overview
 
@@ -443,10 +444,11 @@ Limitations, all documented where they are decided:
 - **Redis restart without its data.** The service fails closed until the
   deals are activated again. Activation is idempotent; the reconciler does
   not reload the gate on its own.
-- **JWT is HS256 with a shared secret.** Fine for local Compose, tests and
-  load runs; production would verify tokens from an OIDC IdP (JWKS / RS256)
-  behind the same `platform/auth` boundary
-  ([ADR 0008](docs/adr/0008-jwt-authentication.md)).
+- **JWT defaults to HS256 with a shared secret.** Fine for local Compose,
+  tests and load runs. Set `JWT_JWKS_URL` to verify RS256 tokens from an
+  OIDC IdP behind the same `platform/auth` boundary
+  ([ADR 0008](docs/adr/0008-jwt-authentication.md),
+  [ADR 0010](docs/adr/0010-oidc-jwks-verification.md)).
 - **Payments are simulated.** Confirmation assumes the payment succeeded.
 - **One replica measured.** Load was measured on one replica on a shared
   4-CPU VM. Replicas are stateless by design; K8s manifests include an HPA,
@@ -456,9 +458,8 @@ Next steps:
 
 1. **Stock shards.** Split a deal's counters over several rows to raise
    per-deal write throughput and bring the reservation p99 under target.
-2. **OIDC / JWKS verification** against a real IdP (OAuth 2.0 / OpenID Connect).
-3. **A transactional outbox** to publish `order.confirmed` events.
-4. **Multi-replica load test** on the Kubernetes deployment.
+2. **A transactional outbox** to publish `order.confirmed` events.
+3. **Multi-replica load test** on the Kubernetes deployment.
 
 ## How I Used AI
 

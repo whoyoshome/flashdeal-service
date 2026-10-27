@@ -96,7 +96,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	}
 	log := logger.New(stdout, cfg.LogLevel)
 
-	tokens, err := auth.New(auth.Config{Secret: cfg.Auth.Secret, Issuer: cfg.Auth.Issuer})
+	tokens, err := newAuthenticator(cfg.Auth)
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
@@ -249,6 +249,13 @@ func shutdown(ctx context.Context, name string, srv *http.Server) error {
 		return fmt.Errorf("%s shutdown: %w", name, err)
 	}
 	return nil
+}
+
+func newAuthenticator(cfg config.Auth) (middleware.Authenticator, error) {
+	if cfg.JWKSURL != "" {
+		return auth.NewJWKS(auth.JWKSConfig{URL: cfg.JWKSURL, Issuer: cfg.Issuer})
+	}
+	return auth.New(auth.Config{Secret: cfg.Secret, Issuer: cfg.Issuer})
 }
 
 // rateLimitBridge adapts the Redis token bucket to the HTTP middleware port
