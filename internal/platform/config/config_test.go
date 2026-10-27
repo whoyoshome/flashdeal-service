@@ -43,6 +43,8 @@ func TestLoad(t *testing.T) {
 		require.Equal(t, 100, cfg.ExpireBatchSize)
 		require.Equal(t, 30*time.Second, cfg.ReconcileEvery)
 		require.Equal(t, 5*time.Second, cfg.StockSampleEvery)
+		require.InDelta(t, 50.0, cfg.RateLimitRPS, 0)
+		require.Equal(t, 100, cfg.RateLimitBurst)
 		require.Equal(t, testPostgresURL, cfg.Postgres.URL)
 		require.EqualValues(t, 20, cfg.Postgres.MaxConns)
 		require.EqualValues(t, 2, cfg.Postgres.MinConns)
@@ -194,6 +196,8 @@ func TestLoadValidation(t *testing.T) {
 		{name: "rejects a non-positive Redis pool size", env: []string{"REDIS_POOL_SIZE=0"}},
 		{name: "rejects a non-positive Redis read timeout", env: []string{"REDIS_READ_TIMEOUT=0s"}},
 		{name: "rejects a short JWT secret", env: []string{"JWT_SECRET=too-short-to-be-safe"}},
+		{name: "rejects a negative rate limit", env: []string{"RATE_LIMIT_RPS=-1"}},
+		{name: "rejects a non-positive burst when rate limiting is on", env: []string{"RATE_LIMIT_RPS=10", "RATE_LIMIT_BURST=0"}},
 	}
 
 	for _, tc := range tests {

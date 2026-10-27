@@ -21,6 +21,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/whoyoshome/flashdeal-service/internal/delivery/httpapi"
+	"github.com/whoyoshome/flashdeal-service/internal/delivery/httpapi/middleware"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/auth"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/clock"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/config"
@@ -159,6 +160,11 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	reconcile := usecase.NewReconcile(dealRepo, dealRepo, gate, clk)
 	stockLevels := usecase.NewStockLevels(dealRepo, gate, clk)
 
+	var limiter middleware.RateLimiter
+	if cfg.RateLimitRPS > 0 {
+		limiter = rateLimitBridge{redisrepo.NewRateLimiter(rdb, cfg.RateLimitRPS, cfg.RateLimitBurst)}
+	}
+
 	// Delivery
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
@@ -170,6 +176,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 			Confirm:        confirm,
 			Cancel:         cancelReservation,
 			Tokens:         tokens,
+			RateLimiter:    limiter,
 			Idempotency:    redisrepo.NewIdempotencyStore(rdb),
 			IdempotencyTTL: cfg.IdempotencyTTL,
 			RequestTimeout: cfg.RequestTimeout,
@@ -242,4 +249,21 @@ func shutdown(ctx context.Context, name string, srv *http.Server) error {
 		return fmt.Errorf("%s shutdown: %w", name, err)
 	}
 	return nil
+}
+
+// rateLimitBridge adapts the Redis token bucket to the HTTP middleware port
+// without letting delivery import redisrepo (or the reverse).
+type rateLimitBridge struct{ lim *redisrepo.RateLimiter }
+
+func (b rateLimitBridge) Allow(ctx context.Context, subject string) (middleware.RateLimitResult, error) {
+	d, err := b.lim.Allow(ctx, subject)
+	if err != nil {
+		return middleware.RateLimitResult{}, err
+	}
+	return middleware.RateLimitResult{
+		Allowed:    d.Allowed,
+		Remaining:  d.Remaining,
+		RetryAfter: d.RetryAfter,
+		Limit:      d.Limit,
+	}, nil
 }

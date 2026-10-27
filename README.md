@@ -276,6 +276,7 @@ obvious has an architecture decision record:
 | [0006](docs/adr/0006-asynchronous-commit-for-reservations.md) | Commit reservation transactions asynchronously |
 | [0007](docs/adr/0007-fail-fast-redis-client.md) | Fail fast when Redis is down: no client retries |
 | [0008](docs/adr/0008-jwt-authentication.md) | Bearer JWT (HS256) with `user` / `admin` roles |
+| [0009](docs/adr/0009-per-user-rate-limiting.md) | Per-subject Redis token bucket on authenticated routes |
 
 ## Technical overview
 
@@ -284,6 +285,7 @@ obvious has an architecture decision record:
 | Go backend & Clean Architecture | `delivery → usecase → domain`, enforced by `depguard` |
 | HTTP/REST | Versioned `/v1` API, OpenAPI 3.1, stable error codes |
 | AuthN / AuthZ (JWT) | Bearer HS256, `sub` + `role`; admin routes require `admin` ([ADR 0008](docs/adr/0008-jwt-authentication.md)) |
+| Per-user rate limit | Redis token bucket after auth (`429 RATE_LIMITED`, [ADR 0009](docs/adr/0009-per-user-rate-limiting.md)) |
 | Distributed correctness | Redis Lua gate + PostgreSQL `CHECK`, compensation, reconciler |
 | Observability | `slog` JSON, Prometheus business metrics, OpenTelemetry → Jaeger, pprof |
 | CI/CD | GitHub Actions: lint, `govulncheck`, unit, integration, e2e, image; Dependabot |
@@ -456,8 +458,7 @@ Next steps:
    per-deal write throughput and bring the reservation p99 under target.
 2. **OIDC / JWKS verification** against a real IdP (OAuth 2.0 / OpenID Connect).
 3. **A transactional outbox** to publish `order.confirmed` events.
-4. **Per-user rate limiting** with a token bucket in Redis.
-5. **Multi-replica load test** on the Kubernetes deployment.
+4. **Multi-replica load test** on the Kubernetes deployment.
 
 ## How I Used AI
 
