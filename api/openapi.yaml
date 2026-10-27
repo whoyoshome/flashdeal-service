@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: FlashDeal Service API
-  version: 0.8.0
+  version: 0.9.0
   summary: High-concurrency flash-sale API with zero overselling.
   description: |
     Sells a limited stock of a product during a short window. A user reserves
@@ -13,8 +13,10 @@ info:
 
     Authentication uses Bearer JWTs (HS256). Claims: `sub` (user id),
     `role` (`user` or `admin`), `iss`, `iat`, `exp`. Create/activate deals
-    require `role=admin`. Public deal reads, health and metrics stay open.
-    Locally mint tokens with `make token` (same secret as `JWT_SECRET`).
+    require `role=admin`. Authenticated routes are rate-limited per `sub`
+    with a Redis token bucket (`429 RATE_LIMITED`). Public deal reads,
+    health and metrics stay open. Locally mint tokens with `make token`
+    (same secret as `JWT_SECRET`).
   license:
     name: MIT
     identifier: MIT
@@ -62,6 +64,8 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -171,6 +175,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -228,6 +234,8 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '409':
           description: |
             The request conflicts with the current state: `SOLD_OUT`,
@@ -280,6 +288,8 @@ paths:
           $ref: '#/components/responses/Conflict'
         '410':
           $ref: '#/components/responses/Expired'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -309,6 +319,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -604,6 +616,7 @@ components:
             - STOCK_UNAVAILABLE
             - UNAUTHENTICATED
             - FORBIDDEN
+            - RATE_LIMITED
             - METHOD_NOT_ALLOWED
             - REQUEST_TIMEOUT
             - IDEMPOTENCY_IN_PROGRESS
@@ -628,6 +641,24 @@ components:
             $ref: '#/components/schemas/Error'
     Forbidden:
       description: Valid token without the required role (`FORBIDDEN`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: Authenticated caller exceeded the per-subject token bucket (`RATE_LIMITED`).
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+            minimum: 1
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
       content:
         application/json:
           schema:

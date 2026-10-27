@@ -22,6 +22,8 @@ data:
   STOCK_SAMPLE_EVERY: 5s
   SHUTDOWN_TIMEOUT: 15s
   READINESS_TIMEOUT: 2s
+  RATE_LIMIT_RPS: "50"
+  RATE_LIMIT_BURST: "100"
   # Empty disables tracing until an OTLP collector is wired.
   TRACING_OTLP_ENDPOINT: ""
   TRACING_SAMPLE_RATIO: "0.1"

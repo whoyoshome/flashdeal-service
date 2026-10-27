@@ -68,6 +68,9 @@ type Deps struct {
 	// Tokens verifies Bearer JWTs. Required for authenticated routes.
 	Tokens *auth.Service
 
+	// RateLimiter bounds authenticated callers. Nil disables it.
+	RateLimiter middleware.RateLimiter
+
 	// Idempotency stores reservation responses by Idempotency-Key. Nil
 	// disables the middleware (handler tests).
 	Idempotency usecase.IdempotencyStore
@@ -133,7 +136,7 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/deals/{id}", h.getDeal)
 
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth(d.Tokens))
+			r.Use(middleware.Auth(d.Tokens), middleware.RateLimit(d.RateLimiter, d.Log))
 			r.With(middleware.RequireAdmin).Post("/deals", h.createDeal)
 			r.With(middleware.RequireAdmin).Post("/deals/{id}/activate", h.activateDeal)
 			r.With(idempotency(d)...).Post("/deals/{id}/reservations", h.reserve)

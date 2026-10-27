@@ -53,6 +53,11 @@ type Config struct {
 	// StockSampleEvery is how often each replica publishes the stock left per
 	// active deal (stock_remaining). Match it to the Prometheus scrape interval.
 	StockSampleEvery time.Duration `env:"STOCK_SAMPLE_EVERY" envDefault:"5s"`
+	// RateLimitRPS is the sustained token refill per authenticated subject.
+	// Zero disables the limiter (tests that need an unbounded client).
+	RateLimitRPS float64 `env:"RATE_LIMIT_RPS" envDefault:"50"`
+	// RateLimitBurst is the token bucket capacity per subject.
+	RateLimitBurst int `env:"RATE_LIMIT_BURST" envDefault:"100"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
@@ -187,6 +192,12 @@ func (c Config) validate() error {
 	}
 	if c.Auth.Issuer == "" {
 		errs = append(errs, errors.New("JWT_ISSUER is required"))
+	}
+	if c.RateLimitRPS < 0 {
+		errs = append(errs, errors.New("RATE_LIMIT_RPS must be >= 0"))
+	}
+	if c.RateLimitRPS > 0 && c.RateLimitBurst <= 0 {
+		errs = append(errs, errors.New("RATE_LIMIT_BURST must be positive when rate limiting is enabled"))
 	}
 
 	if err := errors.Join(errs...); err != nil {
