@@ -19,6 +19,7 @@ const (
 	CodeReservationExpired Code = "RESERVATION_EXPIRED"
 	CodeConflict           Code = "CONFLICT"
 	CodeUnavailable        Code = "STOCK_UNAVAILABLE"
+	CodePaymentDeclined    Code = "PAYMENT_DECLINED"
 )
 
 // Error is a business error with a stable, client-facing code.
@@ -40,6 +41,9 @@ var (
 	ErrReservationNotFound   = &Error{Code: CodeNotFound, Message: "reservation not found"}
 	ErrAlreadyExists         = &Error{Code: CodeConflict, Message: "resource already exists"}
 	ErrStockUnavailable      = &Error{Code: CodeUnavailable, Message: "stock service unavailable"}
+	// ErrPaymentDeclined is returned when the payment gateway refuses the
+	// charge. Confirmation never starts, so no order is created.
+	ErrPaymentDeclined = &Error{Code: CodePaymentDeclined, Message: "payment declined"}
 	// ErrIdempotencyKeyReused means a client sent an idempotency key it had
 	// already used for a different request; replaying it would be unsafe.
 	ErrIdempotencyKeyReused = &Error{Code: CodeConflict, Message: "idempotency key already used for a different request"}

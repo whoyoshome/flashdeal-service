@@ -127,6 +127,9 @@ type ReservationRepository interface {
 	// already sent the same idempotency key for the same request it returns
 	// the stored reservation with created false and reserves nothing.
 	Create(ctx context.Context, r domain.Reservation) (stored domain.Reservation, created bool, err error)
+	// Get loads a reservation without locking it. It returns
+	// domain.ErrReservationNotFound when absent.
+	Get(ctx context.Context, id string) (domain.Reservation, error)
 	// GetForUpdate loads a reservation and locks it until the surrounding
 	// transaction ends. It returns domain.ErrReservationNotFound when absent.
 	GetForUpdate(ctx context.Context, id string) (domain.Reservation, error)
@@ -219,4 +222,23 @@ type EventPublisher interface {
 	// Publish delivers every event in events, in order. On error some of
 	// them may have been delivered.
 	Publish(ctx context.Context, events []OutboxEvent) error
+}
+
+// PaymentCharge is what Confirm asks the payment gateway to take before it
+// writes the order (ADR 0014).
+type PaymentCharge struct {
+	ReservationID string
+	UserID        string
+	AmountCents   int64
+	Currency      string
+}
+
+// PaymentGateway charges the buyer for a reservation. Confirm calls it
+// outside the database transaction so a slow provider never holds a row
+// lock. Implementations must be idempotent on ReservationID.
+type PaymentGateway interface {
+	// Charge takes the payment for the reservation. A retry with the same
+	// ReservationID must not charge again. It returns domain.ErrPaymentDeclined
+	// when the provider refuses the charge.
+	Charge(ctx context.Context, in PaymentCharge) error
 }

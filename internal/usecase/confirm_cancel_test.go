@@ -15,6 +15,7 @@ type flowDeps struct {
 	deals        *fakeDeals
 	reservations *fakeReservations
 	orders       *fakeOrders
+	payments     *fakePayments
 	gate         *fakeGate
 	tx           *fakeTx
 	clock        *fakeClock
@@ -27,6 +28,7 @@ func newFlowDeps(t *testing.T, status domain.ReservationStatus) *flowDeps {
 		deals:        newFakeDeals(activeDeal(t)),
 		reservations: newFakeReservations(storedReservation(t, status)),
 		orders:       &fakeOrders{},
+		payments:     &fakePayments{},
 		gate:         &fakeGate{},
 		tx:           &fakeTx{},
 		clock:        &fakeClock{now: t0.Add(time.Minute)},
@@ -35,7 +37,7 @@ func newFlowDeps(t *testing.T, status domain.ReservationStatus) *flowDeps {
 }
 
 func (d *flowDeps) confirm() *usecase.Confirm {
-	return usecase.NewConfirm(d.deals, d.deals, d.reservations, d.orders, d.tx, d.clock, d.ids)
+	return usecase.NewConfirm(d.deals, d.deals, d.reservations, d.orders, d.payments, d.tx, d.clock, d.ids)
 }
 
 func (d *flowDeps) cancel() *usecase.Cancel {
@@ -65,6 +67,22 @@ func TestConfirm(t *testing.T) {
 		require.Equal(t, usd(t, 9998), order.Total())
 		require.Equal(t, t0.Add(time.Minute), order.CreatedAt())
 		require.Len(t, deps.orders.created, 1)
+		require.Equal(t, []usecase.PaymentCharge{{
+			ReservationID: reservationID, UserID: "user-1", AmountCents: 9998, Currency: "USD",
+		}}, deps.payments.charges)
+	})
+
+	t.Run("returns ErrPaymentDeclined and writes nothing when the charge is refused", func(t *testing.T) {
+		t.Parallel()
+		deps := newFlowDeps(t, domain.StatusPending)
+		deps.payments.err = domain.ErrPaymentDeclined
+
+		_, err := deps.confirm().Execute(t.Context(), ownInput())
+
+		require.ErrorIs(t, err, domain.ErrPaymentDeclined)
+		require.Zero(t, deps.tx.calls)
+		require.Empty(t, deps.orders.created)
+		require.Equal(t, domain.StatusPending, deps.reservations.byID[reservationID].Status())
 	})
 
 	failures := []struct {

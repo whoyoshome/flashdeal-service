@@ -214,12 +214,26 @@ func (f *fakeReservations) Create(_ context.Context, r domain.Reservation) (doma
 	return r, true, nil
 }
 
+func (f *fakeReservations) Get(_ context.Context, id string) (domain.Reservation, error) {
+	return f.GetForUpdate(context.Background(), id)
+}
+
 func (f *fakeReservations) GetForUpdate(_ context.Context, id string) (domain.Reservation, error) {
 	r, ok := f.byID[id]
 	if !ok {
 		return domain.Reservation{}, domain.ErrReservationNotFound
 	}
 	return r, nil
+}
+
+type fakePayments struct {
+	err     error
+	charges []usecase.PaymentCharge
+}
+
+func (f *fakePayments) Charge(_ context.Context, in usecase.PaymentCharge) error {
+	f.charges = append(f.charges, in)
+	return f.err
 }
 
 func (f *fakeReservations) UpdateStatus(_ context.Context, r domain.Reservation) error {
