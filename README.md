@@ -67,7 +67,10 @@ uses the body `{"code", "message", "request_id"}`.
 - The per-user limit is cumulative across a user's reservations on a deal and
   holds under parallel requests (enforced atomically in Redis).
 - If Redis is unreachable, reservations fail closed with `503
-  STOCK_UNAVAILABLE`; nothing is sold without the gate.
+  STOCK_UNAVAILABLE` within milliseconds (the Redis client never retries,
+  [ADR 0007](docs/adr/0007-fail-fast-redis-client.md)); nothing is sold
+  without the gate, and sales resume when Redis returns. `make test-chaos`
+  proves it under load ([results](test/load/results/chaos.md)).
 - Reservations are idempotent per user and `Idempotency-Key`: a retry replays
   the original response (marked `Idempotency-Replayed: true`) for 24 h, and a
   retry while the first request is still running gets `409
@@ -93,6 +96,7 @@ uses the body `{"code", "message", "request_id"}`.
 | `make test`             | Unit tests with the race detector                       |
 | `make test-integration` | Integration tests against real Postgres and Redis       |
 | `make test-e2e`         | End-to-end tests over HTTP against the running stack     |
+| `make test-chaos`       | Stop Redis and the API under load; check 503s, no oversell and a clean exit |
 | `make lint`             | `golangci-lint` (including layer rules) + `govulncheck` |
 | `make lint-api`         | Validate `api/openapi.yaml` with Redocly (Docker)        |
 | `make load`             | k6 flash-sale scenario against the running stack        |

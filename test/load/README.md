@@ -60,3 +60,4 @@ For example, a gentle run: `STOCK=1000 PEAK_RPS=1000 RAMP=10s HOLD=30s make load
 - [Phase 4: Redis gate and deal cache vs baseline](results/redis-gate.md)
 - [Phase 6: a flash sale on the Grafana dashboard](results/observability.md)
 - [Phase 7: the reservation write path, profiled and fixed](results/write-path.md)
+- [Phase 7: chaos under load (Redis down, SIGTERM)](results/chaos.md)
