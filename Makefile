@@ -27,7 +27,7 @@ JWT_ISSUER ?= flashdeal
 TOKEN_SUB  ?= alice
 TOKEN_ROLE ?= user
 
-.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api lint-k8s load load-k8s build tidy token
+.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api lint-k8s load load-k8s load-k8s-job build tidy token
 
 ## check: lint and unit tests (required before declaring a task done)
 check: lint test
@@ -89,6 +89,7 @@ lint-api:
 lint-k8s:
 	docker run --rm -v "$(CURDIR)/deploy/k8s:/k8s:ro" $(KUBECONFORM_IMAGE) -strict -summary /k8s
 	docker run --rm -v "$(CURDIR)/deploy/k8s/smoke:/k8s:ro" $(KUBECONFORM_IMAGE) -strict -summary /k8s
+	docker run --rm -v "$(CURDIR)/test/load/k8s:/k8s:ro" $(KUBECONFORM_IMAGE) -strict -summary /k8s
 
 ## load: k6 flash-sale scenario against the running stack (make up + make migrate first)
 load:
@@ -106,6 +107,12 @@ load-k8s:
 		-e STOCK -e PEAK_RPS -e RAMP -e HOLD -e THRESHOLDS \
 		-e JWT_SECRET=$(JWT_SECRET) -e JWT_ISSUER=$(JWT_ISSUER) \
 		$(K6_IMAGE) run --summary-export=/load/results/multi-replica.json /load/flash_sale.js
+
+## load-k8s-job: same scenario as a k6 Job inside the kind cluster, hitting the Service directly
+## (run deploy/k8s/smoke/run.sh first; LOAD_K8S_SUMMARY picks the summary file)
+LOAD_K8S_SUMMARY ?= test/load/results/k8s-job.json
+load-k8s-job:
+	./test/load/k8s/run.sh $(LOAD_K8S_SUMMARY)
 
 ## token: mint a local JWT (TOKEN_SUB=alice TOKEN_ROLE=admin make token)
 token:

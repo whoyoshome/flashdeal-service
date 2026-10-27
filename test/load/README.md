@@ -47,6 +47,23 @@ curated results are committed as Markdown in [`results/`](results).
 
 For example, a gentle run: `STOCK=1000 PEAK_RPS=1000 RAMP=10s HOLD=30s make load`.
 
+## On Kubernetes
+
+[`k8s/k6-job.yaml`](k8s/k6-job.yaml) runs the same scenario as a Job inside
+the cluster, so traffic reaches the API Service directly. Through
+`kubectl port-forward` (`make load-k8s`), the tunnel itself becomes the
+bottleneck at 5,000 attempts per second. After `deploy/k8s/smoke/run.sh`
+has deployed the API:
+
+```bash
+STOCK=10000 PEAK_RPS=5000 RAMP=2s HOLD=20s make load-k8s-job
+```
+
+[`k8s/run.sh`](k8s/run.sh) loads the scripts and parameters into
+ConfigMaps, runs the Job, prints the k6 output and saves the summary to
+`results/k8s-job.json` (`LOAD_K8S_SUMMARY` changes the path). A crossed
+threshold fails the Job and the target, but the summary is still saved.
+
 ## Reading the summary
 
 - `dropped_iterations` counts attempts k6 could not even start because all
@@ -62,3 +79,5 @@ For example, a gentle run: `STOCK=1000 PEAK_RPS=1000 RAMP=10s HOLD=30s make load
 - [Phase 6: a flash sale on the Grafana dashboard](results/observability.md)
 - [Phase 7: the reservation write path, profiled and fixed](results/write-path.md)
 - [Phase 7: chaos under load (Redis down, SIGTERM)](results/chaos.md)
+- [Stock shards: 1 vs 8 rows, 1 vs 2 replicas](results/stock-shards.md)
+- [k6 inside the cluster: scenarios A and B on 2 replicas](results/k8s-in-cluster.md)
