@@ -91,7 +91,7 @@ type Deps struct {
 	ReadinessTimeout time.Duration
 
 	// DemoEnabled serves GET / and POST /v1/demo/session for the public
-	// portfolio page. Requires Demo and Issuer.
+	// demo UI. Requires Demo and Issuer.
 	DemoEnabled bool
 	Demo        DemoStarter
 	Issuer      TokenIssuer

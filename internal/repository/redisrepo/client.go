@@ -15,7 +15,7 @@ import (
 // NewClient creates a Redis client with explicit timeouts and verifies the
 // server is reachable, so a misconfigured instance fails at startup.
 // REDIS_URL (redis:// or rediss://) wins over Addr/Password/DB so managed
-// Redis (Upstash) works without splitting the connection string.
+// Redis works without splitting the connection string.
 func NewClient(ctx context.Context, cfg config.Redis) (*redis.Client, error) {
 	opt, err := redisOptions(cfg)
 	if err != nil {

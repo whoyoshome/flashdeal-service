@@ -70,11 +70,11 @@ type Config struct {
 	StockShards int `env:"STOCK_SHARDS" envDefault:"32"`
 	// Outbox configures the relay that publishes order.confirmed events.
 	Outbox Outbox `envPrefix:"OUTBOX_"`
-	// DemoEnabled serves the clickable demo UI at GET / and POST /v1/demo/session.
-	// For public portfolio deploys only (ADR 0015). Requires JWT_SECRET (HS256).
+	// DemoEnabled serves the clickable demo UI at GET / and POST /v1/demo/session
+	// (ADR 0015). Requires JWT_SECRET (HS256).
 	DemoEnabled bool `env:"DEMO_ENABLED" envDefault:"false"`
-	// MigrateOnStart applies pending migrations before the HTTP server starts.
-	// Use on single-service hosts (Render) that have no separate migrate Job.
+	// MigrateOnStart applies pending migrations before the HTTP server starts,
+	// when there is no separate migrate Job.
 	MigrateOnStart bool `env:"MIGRATE_ON_START" envDefault:"false"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
@@ -132,8 +132,8 @@ type Tracing struct {
 
 // Redis configures the go-redis client.
 type Redis struct {
-	// URL, when set, is a redis:// or rediss:// connection string (Upstash,
-	// Redis Cloud). It replaces Addr, Password and DB.
+	// URL, when set, is a redis:// or rediss:// connection string (managed
+	// Redis). It replaces Addr, Password and DB.
 	URL  string `env:"URL"`
 	Addr string `env:"ADDR" envDefault:"localhost:6379"`
 	// Password is a secret: never log it.

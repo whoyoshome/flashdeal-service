@@ -1,14 +1,13 @@
-# 0015. Public clickable demo on a free cloud host
+# 0015. Public clickable demo mode
 
 - Status: accepted
 - Date: 2026-10-27
 
 ## Context
 
-Recruiters open the repository from a CV and will not run Docker. The
-project needed the same kind of “click the URL and try it” surface as a
-typical SaaS portfolio deploy (Render + Neon + Upstash), without turning
-the production API into an open registration system.
+The HTTP API is JWT-protected. A hosted instance still needs a way for
+anyone opening the service URL to try reserve → confirm without minting
+tokens by hand or running Docker.
 
 ## Decision
 
@@ -21,17 +20,15 @@ the production API into an open registration system.
   `JWT_JWKS_URL`.
 - **Rate limit.** Session creation uses the same Redis token bucket as
   authenticated routes, keyed by client IP (`demo:<ip>`), including
-  `X-Forwarded-For` behind Render.
-- **`MIGRATE_ON_START`.** A single Render web service has no migrate Job;
-  the API applies embedded migrations before listen when this flag is set.
-- **`REDIS_URL`.** Upstash (and similar) expose `rediss://…`. When set, it
+  `X-Forwarded-For` behind a reverse proxy.
+- **`MIGRATE_ON_START`.** Useful when the process is the only place that
+  can apply schema (no separate migrate Job).
+- **`REDIS_URL`.** Managed Redis often exposes `rediss://…`. When set, it
   replaces `REDIS_ADDR` / password / DB.
 
 ## Consequences
 
-- A recruiter can open the service URL, start a sale, reserve and confirm
-  without installing anything. Cold starts on free tiers may take 30–60 s.
-- Each session inserts a deal row; free Neon quotas are enough for light
-  traffic. Abuse is bounded by the rate limiter and by deal size (5 units).
-- Demo mode must stay off outside the portfolio deploy: it issues tokens
-  without an IdP.
+- Opening the service root is enough to walk through a sale.
+- Each session inserts a deal row; traffic is bounded by the rate limiter
+  and by deal size (5 units).
+- Leave `DEMO_ENABLED` off when tokens come from a real IdP.

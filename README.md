@@ -81,19 +81,19 @@ deploy/                 Prometheus, Grafana, and Kubernetes manifests (hardened 
 test/                   e2e, chaos and k6 load tests with their results
 ```
 
-## Live demo
+## Demo
 
-After you deploy with Neon + Upstash + Render (see
-[`deploy/cloud/README.md`](deploy/cloud/README.md)), put the HTTPS URL here
-and in the GitHub repo homepage so a recruiter can click through without
-Docker:
+- **App:** _pending deploy — paste the public HTTPS URL here_
+- **API:** _same host_ `/healthz`
 
-**https://YOUR-SERVICE.onrender.com** ← replace after the first deploy
+The first request can take 30–60 seconds if the free host has spun down;
+retry if a click fails once.
 
-On that page: **Start demo sale** → **Reserve 1 unit** → **Confirm order**.
-Each visitor gets a private 5-unit deal and a short-lived JWT
-([ADR 0015](docs/adr/0015-public-demo-mode.md)). Free Render may cold-start
-for 30–60 seconds on the first request.
+No account needed. On the app page:
+
+1. **Start demo sale** — opens a private 5-unit deal and mints a short-lived JWT for this browser.
+2. **Reserve 1 unit** — real `POST /v1/deals/{id}/reservations` with `Idempotency-Key`.
+3. **Confirm order** — real `POST /v1/reservations/{id}/confirm` (payment stub always approves).
 
 ## Quick start
 
@@ -308,7 +308,7 @@ obvious has an architecture decision record:
 | [0012](docs/adr/0012-transactional-outbox.md) | Publish `order.confirmed` to a Redis Stream through a transactional outbox |
 | [0013](docs/adr/0013-single-statement-reservation.md) | Reserve in a single statement when a stock shard is free |
 | [0014](docs/adr/0014-payment-gateway-port.md) | Charge through a `PaymentGateway` port before confirming |
-| [0015](docs/adr/0015-public-demo-mode.md) | Public clickable demo (`DEMO_ENABLED`) on Render + Neon + Upstash |
+| [0015](docs/adr/0015-public-demo-mode.md) | Public clickable demo UI (`DEMO_ENABLED`) |
 
 ## Technical overview
 

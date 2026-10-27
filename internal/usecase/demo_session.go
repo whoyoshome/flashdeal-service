@@ -22,7 +22,7 @@ type DemoSession struct {
 	UserID string
 }
 
-// StartDemo opens a fresh mini-deal and a buyer id for the portfolio demo
+// StartDemo opens a fresh mini-deal and a buyer id for the public demo
 // page (ADR 0015). Each call is isolated so visitors do not share stock.
 type StartDemo struct {
 	deals DealRepository

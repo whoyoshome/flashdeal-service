@@ -21,7 +21,7 @@ info:
 
     When `DEMO_ENABLED=true`, `GET /` serves a clickable demo page and
     `POST /v1/demo/session` mints a short-lived user JWT plus a private
-    5-unit deal (portfolio deploys only).
+    5-unit deal.
   license:
     name: MIT
     identifier: MIT
@@ -36,7 +36,7 @@ tags:
   - name: reservations
     description: Reserve, confirm and cancel units of a deal.
   - name: demo
-    description: Public portfolio demo (only when DEMO_ENABLED=true).
+    description: Public demo UI (only when DEMO_ENABLED=true).
   - name: health
     description: Liveness and readiness probes, and Prometheus metrics.
 
