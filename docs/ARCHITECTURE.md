@@ -219,7 +219,7 @@ El dominio es directo: una **Deal** (oferta) tiene stock, precio, ventana de vig
 
 Dentro: administración de ofertas, consulta de ofertas, reserva, confirmación, cancelación, expiración, idempotencia, observabilidad y pruebas de carga.
 
-Fuera (simulado o delegado): pagos reales (la confirmación asume pago aprobado), un proveedor de identidad real (el usuario llega en un JWT HS256 firmado con un secreto compartido; integrar OAuth 2.0 / OIDC con JWKS queda fuera, ver ADR 0008), catálogo de productos y notificaciones.
+Fuera (simulado o delegado): un proveedor de pagos real (Confirm habla con un puerto `PaymentGateway` antes de la transacción; hoy se cablea `AlwaysApprove`, ver ADR 0014), un proveedor de identidad real (el usuario llega en un JWT HS256 firmado con un secreto compartido; OIDC/JWKS es opcional, ver ADR 0008 y 0010), catálogo de productos y notificaciones. Un consumidor de ejemplo del stream (`cmd/eventconsumer`, `make consume-events`) muestra cómo leer `order.confirmed` y descartar duplicados por `event_id`.
 
 ### Requisitos no funcionales (objetivos a medir con k6)
 
@@ -706,7 +706,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 
 	// Use cases
 	reserve := usecase.NewReserve(dealCache, gate, resRepo, txm, clk, ids, cfg.ReservationTTL, log)
-	confirm := usecase.NewConfirm(resRepo, orderRepo, txm, clk)
+	confirm := usecase.NewConfirm(dealRepo, dealRepo, resRepo, orderRepo, payment.NewAlwaysApprove(), txm, clk, ids)
 	expire := usecase.NewExpire(resRepo, dealRepo, gate, txm)
 
 	// Delivery

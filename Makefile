@@ -27,7 +27,7 @@ JWT_ISSUER ?= flashdeal
 TOKEN_SUB  ?= alice
 TOKEN_ROLE ?= user
 
-.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api lint-k8s load load-k8s load-k8s-job build tidy token
+.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api lint-k8s load load-k8s load-k8s-job build tidy token consume-events
 
 ## check: lint and unit tests (required before declaring a task done)
 check: lint test
@@ -118,9 +118,13 @@ load-k8s-job:
 token:
 	$(GO) run ./cmd/token -secret "$(JWT_SECRET)" -issuer "$(JWT_ISSUER)" -sub "$(TOKEN_SUB)" -role "$(TOKEN_ROLE)"
 
-## build: compile the API binary into bin/
+## consume-events: sample consumer of flashdeal:events (make up first; logs each order.confirmed)
+consume-events:
+	$(GO) run ./cmd/eventconsumer
+
+## build: compile the API, token and eventconsumer binaries into bin/
 build:
-	$(GO) build -trimpath -o bin/ ./cmd/api ./cmd/token
+	$(GO) build -trimpath -o bin/ ./cmd/api ./cmd/token ./cmd/eventconsumer
 
 ## tidy: sync go.mod and go.sum with the imports
 tidy:

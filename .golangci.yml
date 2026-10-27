@@ -92,6 +92,14 @@ linters:
             - github.com/redis/go-redis/v9
             - golang.org/x/sync
 
+        payment:
+          list-mode: strict
+          files: ["**/internal/repository/payment/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/whoyoshome/flashdeal-service/internal/usecase
+            - github.com/whoyoshome/flashdeal-service/internal/domain
+
         worker:
           list-mode: strict
           files: ["**/internal/worker/**", "!$test"]

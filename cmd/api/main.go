@@ -28,6 +28,7 @@ import (
 	"github.com/whoyoshome/flashdeal-service/internal/platform/logger"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/observability"
 	"github.com/whoyoshome/flashdeal-service/internal/platform/uuidgen"
+	"github.com/whoyoshome/flashdeal-service/internal/repository/payment"
 	"github.com/whoyoshome/flashdeal-service/internal/repository/postgres"
 	"github.com/whoyoshome/flashdeal-service/internal/repository/redisrepo"
 	"github.com/whoyoshome/flashdeal-service/internal/usecase"
@@ -154,7 +155,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	manageDeals := usecase.NewManageDeals(dealRepo, gate, clk)
 	dealQueries := usecase.NewDealQueries(dealCache, dealRepo, clk)
 	reserve := usecase.NewReserve(dealCache, gate, resRepo, clk, ids, cfg.ReservationTTL, log)
-	confirm := usecase.NewConfirm(dealRepo, dealRepo, resRepo, orderRepo, txm, clk, ids)
+	confirm := usecase.NewConfirm(dealRepo, dealRepo, resRepo, orderRepo, payment.NewAlwaysApprove(), txm, clk, ids)
 	cancelReservation := usecase.NewCancel(dealRepo, resRepo, gate, txm, clk, log)
 	expire := usecase.NewExpire(resRepo, dealRepo, gate, txm, clk, cfg.ExpireBatchSize, log)
 	reconcile := usecase.NewReconcile(dealRepo, dealRepo, gate, clk)

@@ -113,6 +113,9 @@ UPDATE reservations SET stock_shard = picked.shard FROM picked WHERE id = $3`
   SELECT 1 FROM deal_stock_shards WHERE deal_id = $1 AND capacity - reserved - sold >= $2
 )`
 
+	selectReservationByID = `SELECT ` + reservationColumns + ` FROM reservations
+WHERE id = $1`
+
 	selectReservationForUpdate = `SELECT ` + reservationColumns + ` FROM reservations
 WHERE id = $1
 FOR UPDATE`
@@ -310,11 +313,20 @@ func (r *ReservationRepo) byIdempotencyKey(ctx context.Context, q querier, userI
 	return row.toDomain()
 }
 
+// Get loads the reservation without locking it.
+func (r *ReservationRepo) Get(ctx context.Context, id string) (domain.Reservation, error) {
+	return r.load(ctx, selectReservationByID, id)
+}
+
 // GetForUpdate loads the reservation and locks its row until the
 // surrounding transaction ends.
 func (r *ReservationRepo) GetForUpdate(ctx context.Context, id string) (domain.Reservation, error) {
+	return r.load(ctx, selectReservationForUpdate, id)
+}
+
+func (r *ReservationRepo) load(ctx context.Context, sql, id string) (domain.Reservation, error) {
 	var row reservationRow
-	err := db(ctx, r.pool).QueryRow(ctx, selectReservationForUpdate, id).Scan(row.scanTargets()...)
+	err := db(ctx, r.pool).QueryRow(ctx, sql, id).Scan(row.scanTargets()...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Reservation{}, domain.ErrReservationNotFound
 	}

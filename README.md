@@ -68,11 +68,12 @@ The code follows a strict inward dependency rule,
 
 ```text
 cmd/api/                composition root: config, wiring, startup and shutdown
+cmd/eventconsumer/      sample Redis Stream consumer for order.confirmed
 internal/domain/        entities and invariants (Deal, Reservation, Order), stdlib only
 internal/usecase/       business operations and the ports they need
 internal/delivery/      HTTP: chi router, middleware, DTOs, error mapping
-internal/repository/    adapters: postgres (pgx) and redisrepo (go-redis, Lua scripts)
-internal/worker/        expirer, reconciler and stock sampler
+internal/repository/    adapters: postgres (pgx), redisrepo (go-redis, Lua scripts), payment stub
+internal/worker/        expirer, reconciler, outbox relay, stock sampler, event consumer loop
 internal/platform/      config, logging, clock, IDs, metrics and tracing
 migrations/             SQL schema
 api/openapi.yaml        HTTP contract
@@ -292,6 +293,7 @@ obvious has an architecture decision record:
 | [0011](docs/adr/0011-stock-shards.md) | Split each deal's stock over shard rows taken with `SKIP LOCKED` |
 | [0012](docs/adr/0012-transactional-outbox.md) | Publish `order.confirmed` to a Redis Stream through a transactional outbox |
 | [0013](docs/adr/0013-single-statement-reservation.md) | Reserve in a single statement when a stock shard is free |
+| [0014](docs/adr/0014-payment-gateway-port.md) | Charge through a `PaymentGateway` port before confirming |
 
 ## Technical overview
 
@@ -440,6 +442,7 @@ go tool pprof "http://localhost:6060/debug/pprof/profile?seconds=10"
 | `make test-e2e` | The running stack over HTTP, as a client would use it |
 | `make test-chaos` | Stops Redis and then the API under load; checks `503`s, no oversell and a clean exit |
 | `make load` | The k6 flash-sale scenario; fails when a design target is missed |
+| `make consume-events` | Sample Redis Stream consumer: logs each `order.confirmed` and drops duplicates by `event_id` |
 | `make lint` | `golangci-lint`, including the layer rules, plus `govulncheck` |
 | `make lint-api` | Validates `api/openapi.yaml` with Redocly |
 | `make lint-k8s` | Validates `deploy/k8s/` against the Kubernetes schemas with kubeconform |
@@ -478,7 +481,9 @@ Limitations, all documented where they are decided:
   OIDC IdP behind the same `platform/auth` boundary
   ([ADR 0008](docs/adr/0008-jwt-authentication.md),
   [ADR 0010](docs/adr/0010-oidc-jwks-verification.md)).
-- **Payments are simulated.** Confirmation assumes the payment succeeded.
+- **Payments are stubbed.** Confirm charges through a `PaymentGateway` port
+  before the write transaction; `AlwaysApprove` always succeeds
+  ([ADR 0014](docs/adr/0014-payment-gateway-port.md)). No real card charge.
 - **Events are delivered at least once, through Redis.** Consumers must
   drop duplicates by `event_id`. The stream keeps about 100,000 entries,
   and it survives a Redis restart only with Redis persistence enabled

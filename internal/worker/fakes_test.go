@@ -25,6 +25,8 @@ func (m *fakeMetrics) StockGateRepaired(n int) { m.repaired.Add(int64(n)) }
 
 func (m *fakeMetrics) EventsPublished(n int) { m.events.Add(int64(n)) }
 
+func (m *fakeMetrics) EventsConsumed(n int) { m.events.Add(int64(n)) }
+
 func (m *fakeMetrics) SetStockLevels(levels map[int64]int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

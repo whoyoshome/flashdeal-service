@@ -266,7 +266,10 @@ paths:
       tags: [reservations]
       operationId: confirmReservation
       summary: Confirm a reservation and create its order
-      description: Payment is assumed approved. Only the reservation's owner may confirm it.
+      description: |
+        Charges through the payment gateway, then creates the order. The
+        bundled gateway always approves; a declined charge returns 402 and
+        writes nothing. Only the reservation's owner may confirm it.
       security:
         - bearerAuth: []
       responses:
@@ -283,6 +286,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '402':
+          $ref: '#/components/responses/PaymentDeclined'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -681,6 +686,12 @@ components:
             $ref: '#/components/schemas/Error'
     Expired:
       description: The reservation's TTL elapsed before confirmation (`RESERVATION_EXPIRED`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    PaymentDeclined:
+      description: The payment gateway refused the charge (`PAYMENT_DECLINED`). Nothing was written.
       content:
         application/json:
           schema:

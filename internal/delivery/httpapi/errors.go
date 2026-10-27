@@ -22,6 +22,10 @@ func statusFor(c domain.Code) int {
 		return http.StatusConflict
 	case domain.CodeReservationExpired:
 		return http.StatusGone
+	case domain.CodePaymentDeclined:
+		// 402 is rarely used elsewhere; here it means "the card was refused",
+		// not "send payment details again".
+		return http.StatusPaymentRequired
 	case domain.CodeUnavailable:
 		return http.StatusServiceUnavailable
 	default:
