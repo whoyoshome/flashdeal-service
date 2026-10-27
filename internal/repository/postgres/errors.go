@@ -19,7 +19,14 @@ const (
 const (
 	constraintStockNotExceeded = "deal_stock_shards_not_exceeded"
 	constraintReservationDeal  = "reservations_deal_id_fkey"
+	constraintIdempotentKey    = "reservations_idempotent"
 )
+
+// violates reports whether err is a violation of the named constraint.
+func violates(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.ConstraintName == constraint
+}
 
 // translate maps driver errors to domain errors so no pgx type escapes this
 // package as a business outcome. It returns nil when err is not a known

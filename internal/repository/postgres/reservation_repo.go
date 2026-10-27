@@ -35,6 +35,32 @@ const (
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT ON CONSTRAINT reservations_idempotent DO NOTHING`
 
+	// The common case in one round trip and one implicit transaction: take
+	// the units from a free shard and insert the reservation that records
+	// it (ADR 0013). The shard stays locked only while the statement runs,
+	// with no network round trip before COMMIT. set_config(..., true) is the
+	// asyncCommit of this transaction and ends with it. Zero rows means no
+	// free shard had room, and a reservations_idempotent violation means a
+	// retry: Create then takes the transactional path, which tells those
+	// cases apart. The casts type parameters that INSERT ... SELECT would
+	// otherwise read as text.
+	reserveInOneStatement = `WITH async AS (
+  SELECT set_config('synchronous_commit', 'off', true)
+), picked AS (
+  UPDATE deal_stock_shards AS s SET reserved = s.reserved + $4::int
+  WHERE (s.deal_id, s.shard) = (
+    SELECT deal_id, shard FROM deal_stock_shards
+    WHERE deal_id = $2::bigint AND capacity - reserved - sold >= $4::int
+    ORDER BY shard
+    LIMIT 1
+    FOR NO KEY UPDATE SKIP LOCKED
+  ) AND s.capacity - s.reserved - s.sold >= $4::int
+  RETURNING s.shard
+)
+INSERT INTO reservations (id, deal_id, user_id, quantity, status, idempotency_key, expires_at, created_at, updated_at, stock_shard)
+SELECT $1::uuid, $2::bigint, $3::text, $4::int, $5::text, $6::text, $7::timestamptz, $8::timestamptz, $9::timestamptz, picked.shard
+FROM picked, async`
+
 	selectReservationByKey = `SELECT ` + reservationColumns + ` FROM reservations
 WHERE user_id = $1 AND idempotency_key = $2`
 
@@ -134,6 +160,50 @@ func NewReservationRepo(pool *pgxpool.Pool) *ReservationRepo {
 // created false and reserves nothing; the same key for a different request
 // returns domain.ErrIdempotencyKeyReused.
 func (r *ReservationRepo) Create(ctx context.Context, res domain.Reservation) (domain.Reservation, bool, error) {
+	// Inside a caller's transaction a failed statement would abort it, so
+	// only a standalone Create tries the single statement first.
+	if _, inTx := txFrom(ctx); !inTx {
+		done, err := r.createInOneStatement(ctx, res)
+		if err != nil {
+			return domain.Reservation{}, false, err
+		}
+		if done {
+			return res, true, nil
+		}
+	}
+	return r.createInTx(ctx, res)
+}
+
+// createInOneStatement runs reserveInOneStatement and reports whether it
+// stored res. False with a nil error leaves the outcome to createInTx.
+func (r *ReservationRepo) createInOneStatement(ctx context.Context, res domain.Reservation) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	// The statement commits as it ends, so like COMMIT in withinTx it must
+	// not be cancelled midway: a sale could land while the caller hears it
+	// failed and gives its units back to the gate.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
+	defer cancel()
+	tag, err := r.pool.Exec(ctx, reserveInOneStatement,
+		res.ID(), res.DealID(), res.UserID(), res.Quantity(), string(res.Status()),
+		res.IdempotencyKey(), res.ExpiresAt(), res.CreatedAt(), res.UpdatedAt(),
+	)
+	if violates(err, constraintIdempotentKey) {
+		return false, nil
+	}
+	if err != nil {
+		if de := translate(err); de != nil {
+			return false, de
+		}
+		return false, fmt.Errorf("reserve stock on deal %d: %w", res.DealID(), err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// createInTx is Create as a transaction of several statements: it covers
+// what the single statement leaves undecided, at five round trips.
+func (r *ReservationRepo) createInTx(ctx context.Context, res domain.Reservation) (domain.Reservation, bool, error) {
 	var (
 		stored  domain.Reservation
 		created bool
