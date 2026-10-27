@@ -41,6 +41,7 @@ func TestLoad(t *testing.T) {
 		require.Equal(t, 5*time.Second, cfg.Postgres.StatementTimeout)
 		require.Equal(t, "localhost:6379", cfg.Redis.Addr)
 		require.Equal(t, 50, cfg.Redis.PoolSize)
+		require.Equal(t, 500*time.Millisecond, cfg.Redis.DialTimeout)
 		require.Equal(t, 500*time.Millisecond, cfg.Redis.ReadTimeout)
 		require.Empty(t, cfg.Tracing.OTLPEndpoint, "tracing is off unless configured")
 		require.InDelta(t, 1.0, cfg.Tracing.SampleRatio, 0)

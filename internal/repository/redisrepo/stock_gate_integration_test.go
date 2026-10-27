@@ -192,3 +192,16 @@ func TestStockGate_FailsClosed(t *testing.T) {
 	_, err = gate.Restore(t.Context(), deal.ID(), 1, usecase.GateState{Available: 2})
 	require.ErrorIs(t, err, domain.ErrStockUnavailable)
 }
+
+// TestNewClient_DoesNotRetry pins the fail-fast client: with Redis down every
+// retry, of a command or of a dial, waits out another dial timeout, and a
+// command retried after a lost reply could run a reservation script twice.
+func TestNewClient_DoesNotRetry(t *testing.T) {
+	t.Parallel()
+	rdb, err := redisrepo.NewClient(t.Context(), redisConfig(testRedis.Options().Addr))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	require.Zero(t, rdb.Options().MaxRetries, "go-redis stores MaxRetries -1 as 0: no retries")
+	require.Equal(t, 1, rdb.Options().DialerRetries, "a dead Redis costs one dial timeout, not five")
+}

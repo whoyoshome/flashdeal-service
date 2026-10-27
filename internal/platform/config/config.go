@@ -83,10 +83,13 @@ type Tracing struct {
 type Redis struct {
 	Addr string `env:"ADDR" envDefault:"localhost:6379"`
 	// Password is a secret: never log it.
-	Password     string        `env:"PASSWORD"`
-	DB           int           `env:"DB"            envDefault:"0"`
-	PoolSize     int           `env:"POOL_SIZE"     envDefault:"50"`
-	DialTimeout  time.Duration `env:"DIAL_TIMEOUT"  envDefault:"2s"`
+	Password string `env:"PASSWORD"`
+	DB       int    `env:"DB"            envDefault:"0"`
+	PoolSize int    `env:"POOL_SIZE"     envDefault:"50"`
+	// DialTimeout bounds how long a request waits for Redis when it is down:
+	// the service fails closed after it. Redis sits next to the API, where a
+	// connection takes about a millisecond.
+	DialTimeout  time.Duration `env:"DIAL_TIMEOUT"  envDefault:"500ms"`
 	ReadTimeout  time.Duration `env:"READ_TIMEOUT"  envDefault:"500ms"`
 	WriteTimeout time.Duration `env:"WRITE_TIMEOUT" envDefault:"500ms"`
 }

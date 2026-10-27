@@ -37,7 +37,12 @@ func runIntegration(m *testing.M) (int, error) {
 	ctx := context.Background()
 	ctr, err := testcontainers.Run(ctx, "redis:7.4-alpine",
 		testcontainers.WithExposedPorts("6379/tcp"),
-		testcontainers.WithWaitStrategy(wait.ForLog("Ready to accept connections")),
+		// The log line comes before the published port accepts connections, and
+		// the client below dials once (it never retries), so wait for both.
+		testcontainers.WithWaitStrategy(wait.ForAll(
+			wait.ForLog("Ready to accept connections"),
+			wait.ForListeningPort("6379/tcp"),
+		)),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("start redis: %w", err)
