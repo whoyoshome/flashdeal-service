@@ -106,14 +106,17 @@ type DealRepository interface {
 	ListActive(ctx context.Context, now time.Time, afterID int64, limit int) ([]domain.Deal, error)
 }
 
-// DealStock moves units between a deal's reserved and sold counters with
-// conditional updates, so concurrent replicas can never break the totals.
+// DealStock moves a reservation's units between a deal's reserved and sold
+// counters with conditional updates, so concurrent replicas can never break
+// the totals. It takes reservations rather than bare quantities because the
+// units must move on the same stock they were reserved from.
 type DealStock interface {
-	// CommitReserved moves qty units from reserved to sold (confirmation).
-	CommitReserved(ctx context.Context, dealID int64, qty int) error
-	// ReleaseReserved returns qty reserved units to the deal (cancellation
-	// or expiry).
-	ReleaseReserved(ctx context.Context, dealID int64, qty int) error
+	// CommitReserved moves r's units from reserved to sold (confirmation).
+	CommitReserved(ctx context.Context, r domain.Reservation) error
+	// ReleaseReserved returns the units of every reservation in rs to their
+	// deals (cancellation or expiry), locking stock in a fixed order so
+	// concurrent callers cannot deadlock.
+	ReleaseReserved(ctx context.Context, rs []domain.Reservation) error
 }
 
 // ReservationRepository stores reservations.

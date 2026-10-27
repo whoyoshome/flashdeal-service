@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"maps"
-	"slices"
 	"time"
 
 	"github.com/whoyoshome/flashdeal-service/internal/domain"
@@ -69,14 +67,11 @@ func (uc *Expire) expireBatch(ctx context.Context, now time.Time) (int, error) {
 		if err := uc.queue.MarkExpired(ctx, due); err != nil {
 			return fmt.Errorf("save expirations: %w", err)
 		}
-		// Deals are updated in ID order so concurrent workers, which may hold
-		// batches spanning the same deals, always lock them in the same order
-		// and cannot deadlock.
-		units := unitsByDeal(due)
-		for _, dealID := range slices.Sorted(maps.Keys(units)) {
-			if err := uc.stock.ReleaseReserved(ctx, dealID, units[dealID]); err != nil {
-				return fmt.Errorf("release stock of deal %d: %w", dealID, err)
-			}
+		// One call for the batch: the store locks stock in a fixed order, so
+		// concurrent workers holding batches over the same deals cannot
+		// deadlock.
+		if err := uc.stock.ReleaseReserved(ctx, due); err != nil {
+			return fmt.Errorf("release stock: %w", err)
 		}
 		expired = due
 		return nil
@@ -105,12 +100,4 @@ func (uc *Expire) releaseGate(ctx context.Context, expired []domain.Reservation)
 				slog.String("reservation_id", r.ID()), slog.Int64("deal_id", r.DealID()), slog.Any("error", err))
 		}
 	}
-}
-
-func unitsByDeal(rs []domain.Reservation) map[int64]int {
-	units := make(map[int64]int)
-	for _, r := range rs {
-		units[r.DealID()] += r.Quantity()
-	}
-	return units
 }

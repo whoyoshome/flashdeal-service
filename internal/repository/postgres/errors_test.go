@@ -21,7 +21,7 @@ func TestTranslate(t *testing.T) {
 	}{
 		{
 			name: "maps the stock CHECK constraint to ErrSoldOut by name",
-			err:  &pgconn.PgError{Code: "23514", ConstraintName: "deals_stock_not_exceeded"},
+			err:  &pgconn.PgError{Code: "23514", ConstraintName: "deal_stock_shards_not_exceeded"},
 			want: domain.ErrSoldOut,
 		},
 		{
@@ -36,7 +36,7 @@ func TestTranslate(t *testing.T) {
 		},
 		{
 			name: "finds the driver error through wrapping",
-			err:  fmt.Errorf("exec: %w", &pgconn.PgError{Code: "23514", ConstraintName: "deals_stock_not_exceeded"}),
+			err:  fmt.Errorf("exec: %w", &pgconn.PgError{Code: "23514", ConstraintName: "deal_stock_shards_not_exceeded"}),
 			want: domain.ErrSoldOut,
 		},
 		{

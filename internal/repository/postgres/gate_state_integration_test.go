@@ -15,7 +15,7 @@ import (
 
 func TestDealRepoGateState(t *testing.T) {
 	t.Parallel()
-	deals := postgres.NewDealRepo(testPool)
+	deals := postgres.NewDealRepo(testPool, testShards)
 	reservations := postgres.NewReservationRepo(testPool)
 
 	t.Run("sums pending and confirmed units per buyer and ignores released ones", func(t *testing.T) {
@@ -32,12 +32,12 @@ func TestDealRepoGateState(t *testing.T) {
 		confirmed := store(alice, 3)
 		require.NoError(t, confirmed.Confirm(t0.Add(time.Minute)))
 		require.NoError(t, reservations.UpdateStatus(t.Context(), confirmed))
-		require.NoError(t, deals.CommitReserved(t.Context(), d.ID(), 3))
+		require.NoError(t, deals.CommitReserved(t.Context(), confirmed))
 		store(bob, 4)
 		cancelled := store(carol, 1)
 		require.NoError(t, cancelled.Cancel(t0.Add(time.Minute)))
 		require.NoError(t, reservations.UpdateStatus(t.Context(), cancelled))
-		require.NoError(t, deals.ReleaseReserved(t.Context(), d.ID(), 1))
+		require.NoError(t, deals.ReleaseReserved(t.Context(), []domain.Reservation{cancelled}))
 
 		state, err := deals.GateState(t.Context(), d.ID())
 

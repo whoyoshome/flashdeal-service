@@ -36,7 +36,7 @@ flowchart TB
 
     reserve -->|"1 read the deal"| cache[("Redis deal cache<br/>2 s, singleflight")]
     reserve -->|"2 reserve.lua: stock<br/>and per-user limit"| gate[("Redis stock gate<br/>sold out: 409 in ~0.5 ms")]
-    reserve -->|"3 INSERT reservation +<br/>conditional UPDATE of the deal"| pg[("PostgreSQL<br/>source of truth, CHECK constraint")]
+    reserve -->|"3 INSERT reservation +<br/>conditional UPDATE of a stock shard"| pg[("PostgreSQL<br/>source of truth, CHECK constraint")]
 
     workers["Workers: expirer, reconciler, stock sampler"] --> gate
     workers --> pg
@@ -50,9 +50,11 @@ A reservation goes through three steps:
    and the buyer's per-user limit atomically. A buyer who arrives too late
    is answered `409 SOLD_OUT` here and never reaches PostgreSQL.
 3. **Write the reservation.** An admitted buyer's reservation is inserted
-   in PostgreSQL in the same transaction as a conditional `UPDATE` of the
-   deal's counters, guarded by `CHECK (reserved + sold <= total_stock)`. If
-   the write fails, the units go back to the gate.
+   in PostgreSQL in the same transaction as a conditional `UPDATE` of one of
+   the deal's stock shards, taken with `SKIP LOCKED` so concurrent sales do
+   not queue on one row. Each shard is guarded by
+   `CHECK (reserved + sold <= capacity)`. If the write fails, the units go
+   back to the gate.
 
 The reservation holds its units for 5 minutes. Confirming it creates the
 order. If it is not confirmed in time, the expirer returns the units.
@@ -218,15 +220,18 @@ written instead of being relaxed to pass.
 | ---------------------------------------------- | ---------------------------------------------------------- |
 | 0 units oversold under any load                | ✅ every load and chaos run                                |
 | Sold-out rejection p99 < 10 ms                 | ✅ 7.8 ms in scenario B · ❌ 562 ms in A, with the CPUs saturated |
-| Successful reservation p99 < 50 ms             | ❌ 86 ms in B, 986 ms in A: one round trip per sale on one row, on 4 shared CPUs |
+| Successful reservation p99 < 50 ms             | ✅ 7–11 ms in B with 8 stock shards, 15–17 ms with 2 replicas · ⚠️ 44–51 ms on the first burst after a restart · ❌ 519–659 ms in A, pool and CPU bound |
 | Redis down: fail closed with `503`             | ✅ 2,500 of 2,500 reservations refused, slowest in 12 ms, none sold |
 | Graceful shutdown without losing requests      | ✅ `SIGTERM` under load: exit code 0, every sale answered  |
 
-The next lever for the reservation p99 is splitting a deal's stock over
-several rows ([ADR 0006](docs/adr/0006-asynchronous-commit-for-reservations.md),
-alternatives). Stateless replicas are part of the design: the stock lives in
-Redis and PostgreSQL, and expiry and reconciliation are safe on any number of
-replicas. Load was measured on a single replica.
+The table above is phase 7, with one stock row per deal. Splitting each
+deal's stock over 8 shard rows
+([ADR 0011](docs/adr/0011-stock-shards.md)) halved the warm tail. It also
+showed that most of the 86 ms was the first burst opening pool connections.
+Pool connections now open at startup
+([stock-shards.md](test/load/results/stock-shards.md)). Stateless replicas
+are part of the design: the stock lives in Redis and PostgreSQL, and expiry
+and reconciliation are safe on any number of replicas.
 
 ### Chaos under load
 
@@ -260,6 +265,7 @@ while the units are written
 - [Phase 7: chaos under load](test/load/results/chaos.md)
 - [JWT authentication: both scenarios measured again](test/load/results/jwt-auth.md)
 - [Multi-replica on kind (2 pods): zero oversell](test/load/results/multi-replica.md)
+- [Stock shards: 1 vs 8 rows, 1 vs 2 replicas](test/load/results/stock-shards.md)
 
 ## Design decisions
 
@@ -279,6 +285,7 @@ obvious has an architecture decision record:
 | [0008](docs/adr/0008-jwt-authentication.md) | Bearer JWT (HS256) with `user` / `admin` roles |
 | [0009](docs/adr/0009-per-user-rate-limiting.md) | Per-subject Redis token bucket on authenticated routes |
 | [0010](docs/adr/0010-oidc-jwks-verification.md) | Optional RS256 verification against an OIDC JWKS URL |
+| [0011](docs/adr/0011-stock-shards.md) | Split each deal's stock over shard rows taken with `SKIP LOCKED` |
 
 ## Technical overview
 
@@ -432,9 +439,15 @@ without publishing it.
 
 Limitations, all documented where they are decided:
 
-- **Reservation latency target missed.** Successful reservations miss the
-  50 ms p99 target on a laptop: 86 ms in scenario B. One deal is one row,
-  which accepts about 2,000 writes per second.
+- **Reservation latency target met only for scenario B.** With 8 stock
+  shards and a warm API, scenario B's p99 is 7–11 ms (15–17 ms on 2
+  replicas). The first burst after a restart measured 44–51 ms. Scenario A
+  (10,000 units at 5,000 rps) stays at 519–659 ms, limited by the
+  20-connection pool and 4 shared CPUs
+  ([stock-shards.md](test/load/results/stock-shards.md)).
+- **Shard fragmentation.** Near the end of a sale, a multi-unit request can
+  get `SOLD_OUT` while single units remain on different shards
+  ([ADR 0011](docs/adr/0011-stock-shards.md)).
 - **Durability window.** Reservations commit asynchronously. A PostgreSQL
   crash can lose the last few hundred milliseconds of holds, never orders
   and never into an oversell
@@ -459,9 +472,10 @@ Limitations, all documented where they are decided:
 
 Next steps:
 
-1. **Stock shards.** Split a deal's counters over several rows to raise
-   per-deal write throughput and bring the reservation p99 under target.
-2. **A transactional outbox** to publish `order.confirmed` events.
+1. **A transactional outbox** to publish `order.confirmed` events.
+2. **Scenario A on real hardware.** Measure 10,000 units at 5,000 rps on
+   dedicated nodes with an in-cluster load generator, not through
+   `kubectl port-forward`.
 
 ## How I Used AI
 

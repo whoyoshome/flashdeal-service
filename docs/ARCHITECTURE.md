@@ -258,15 +258,15 @@ La regla en Go: **las interfaces se declaran donde se consumen** (en `usecase`),
 2. **UseCase** (`Reserve.Execute`) obtiene la oferta (caché + `singleflight`), valida invariantes de dominio (`deal.CanReserve(now, qty)`), y llama al port `StockGate.TryReserve`.
 3. **Repository Redis** ejecuta un script Lua atómico: verifica stock y límite por usuario, decrementa y responde. Si no hay stock, devuelve `domain.ErrSoldOut` y el flujo termina sin tocar PostgreSQL.
 4. **UseCase** crea la entidad `domain.Reservation` y llama a `ReservationRepository.Create` dentro de una transacción (`TxManager.WithinTx`).
-5. **Repository PostgreSQL** inserta la reserva e incrementa `deals.reserved` con un `UPDATE ... WHERE reserved + sold + $qty <= total_stock`. Si ese `UPDATE` afecta 0 filas, devuelve `domain.ErrSoldOut` (defensa en profundidad).
+5. **Repository PostgreSQL** inserta la reserva e incrementa `reserved` en uno de los shards de stock de la oferta (`deal_stock_shards`), elegido con `FOR NO KEY UPDATE SKIP LOCKED` y protegido por `WHERE reserved + sold + $qty <= capacity`. El shard queda guardado en `reservations.stock_shard`. Si ningún shard tiene sitio, devuelve `domain.ErrSoldOut` (defensa en profundidad). Ver ADR 0011.
 6. Si el paso 5 falla, **UseCase** compensa con `StockGate.Release` usando `context.WithoutCancel` (la compensación no debe morir porque el cliente cerró la conexión).
 7. **Delivery** mapea el resultado: `201` con el DTO de la reserva, o el error de dominio a su código HTTP (sección 5).
 
-La confirmación (`POST /v1/reservations/{id}/confirm`) solo toca PostgreSQL: en una transacción bloquea la reserva (`SELECT ... FOR UPDATE`), verifica que siga `pending` y no expirada, la marca `confirmed`, mueve la unidad de `reserved` a `sold` e inserta la `order`.
+La confirmación (`POST /v1/reservations/{id}/confirm`) solo toca PostgreSQL: en una transacción bloquea la reserva (`SELECT ... FOR UPDATE`), verifica que siga `pending` y no expirada, la marca `confirmed`, mueve la unidad de `reserved` a `sold` en el shard de la reserva e inserta la `order`.
 
 ### Por qué Redis primero y PostgreSQL después
 
-Con 1.000 unidades y 50.000 intentos, el 98 % de las requests debe fallar. Si todas llegaran a PostgreSQL, competirían por el lock de una sola fila. Con Redis como compuerta, PostgreSQL recibe como máximo \~1.000 escrituras por oferta, y la restricción `CHECK (reserved + sold <= total_stock)` garantiza la correctitud aunque Redis diverja.
+Con 1.000 unidades y 50.000 intentos, el 98 % de las requests debe fallar. Si todas llegaran a PostgreSQL, competirían por el lock de una sola fila. Con Redis como compuerta, PostgreSQL recibe como máximo \~1.000 escrituras por oferta, repartidas entre varios shards, y la restricción `CHECK (reserved + sold <= capacity)` de cada shard garantiza la correctitud aunque Redis diverja (las capacidades suman `total_stock`).
 
 ## 3. Stack tecnológico justificado
 
@@ -610,7 +610,7 @@ FROM due WHERE r.id = due.id
 RETURNING r.deal_id, r.user_id, r.quantity;
 ```
 
-En la misma transacción se descuenta `deals.reserved`; tras el commit se libera el stock en Redis con `release.lua`.
+En la misma transacción se descuenta `reserved` en el shard de cada reserva (agrupado y en orden `(deal_id, shard)` para no provocar deadlocks); tras el commit se libera el stock en Redis con `release.lua`.
 
 Test que demuestra cero sobreventa (el más importante del repositorio):
 
@@ -807,7 +807,7 @@ Cómo pedírselo a Claude Code: "Lee `docs/ARCHITECTURE.md` y `CLAUDE.md`. Imple
    - Listo cuando: tests table-driven cubren cada invariante y transición; cobertura de `domain` ≥ 90 %.
 3. **Fase 2 — Persistencia en PostgreSQL**
    - Migraciones del anexo, `pgxpool`, `TxManager` (la transacción viaja en el `context`), repositorios y mapeo fila ↔ dominio.
-   - Traducción de errores: `ErrNoRows` → `NotFound`, `23505` → `Conflict`, `violación de deals_stock_not_exceeded → SoldOut (por nombre de constraint)`.
+   - Traducción de errores: `ErrNoRows` → `NotFound`, `23505` → `Conflict`, `violación de deal_stock_shards_not_exceeded → SoldOut (por nombre de constraint)`.
    - Listo cuando: tests de integración con testcontainers-go pasan con `make test-integration`.
 4. **Fase 3 — Casos de uso y API HTTP (línea base solo PostgreSQL)**
    - Casos de uso `ManageDeals`, `GetDeal`, `Reserve`, `Confirm`, `Cancel`, con fakes en tests.
@@ -875,15 +875,24 @@ CREATE TABLE deals (
   price_cents    BIGINT      NOT NULL CHECK (price_cents > 0),
   currency       CHAR(3)     NOT NULL,
   total_stock    INT         NOT NULL CHECK (total_stock > 0),
-  reserved       INT         NOT NULL DEFAULT 0 CHECK (reserved >= 0),
-  sold           INT         NOT NULL DEFAULT 0 CHECK (sold >= 0),
   per_user_limit INT         NOT NULL DEFAULT 1 CHECK (per_user_limit > 0),
   starts_at      TIMESTAMPTZ NOT NULL,
   ends_at        TIMESTAMPTZ NOT NULL,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT deals_window_valid CHECK (ends_at > starts_at),
-  CONSTRAINT deals_stock_not_exceeded CHECK (reserved + sold <= total_stock)
+  CONSTRAINT deals_window_valid CHECK (ends_at > starts_at)
+);
+
+-- ADR 0011: n = max(1, min(STOCK_SHARDS, total_stock / per_user_limit))
+-- filas por oferta; las capacidades suman total_stock.
+CREATE TABLE deal_stock_shards (
+  deal_id  BIGINT   NOT NULL REFERENCES deals(id),
+  shard    SMALLINT NOT NULL CHECK (shard >= 0),
+  capacity INT      NOT NULL CHECK (capacity > 0),
+  reserved INT      NOT NULL DEFAULT 0 CHECK (reserved >= 0),
+  sold     INT      NOT NULL DEFAULT 0 CHECK (sold >= 0),
+  PRIMARY KEY (deal_id, shard),
+  CONSTRAINT deal_stock_shards_not_exceeded CHECK (reserved + sold <= capacity)
 );
 
 CREATE TABLE reservations (
@@ -893,6 +902,7 @@ CREATE TABLE reservations (
   quantity        INT         NOT NULL CHECK (quantity > 0),
   status          TEXT        NOT NULL CHECK (status IN ('pending', 'confirmed', 'expired', 'cancelled')),
   idempotency_key TEXT        NOT NULL,
+  stock_shard     SMALLINT    NOT NULL DEFAULT 0,
   expires_at      TIMESTAMPTZ NOT NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -915,7 +925,7 @@ CREATE TABLE orders (
 );
 ```
 
-El repositorio traduce las violaciones por nombre de constraint, no solo por código SQLSTATE: `deals_stock_not_exceeded` → `ErrSoldOut`, `reservations_idempotent` → devolver la reserva existente.
+El repositorio traduce las violaciones por nombre de constraint, no solo por código SQLSTATE: `deal_stock_shards_not_exceeded` → `ErrSoldOut`, `reservations_idempotent` → devolver la reserva existente.
 
 Claves de Redis:
 

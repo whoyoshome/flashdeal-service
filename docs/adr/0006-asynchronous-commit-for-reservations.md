@@ -73,3 +73,7 @@ default synchronous commit.
   target: 86 ms in scenario B and about 1 s in scenario A. What remains is
   one round trip per sale on one row, plus CPU contention. Stock shards stay
   the next step if production numbers require it.
+
+Update: stock shards were implemented in ADR 0011. The deal counters now
+live in `deal_stock_shards`, and `deal_stock_shards_not_exceeded` replaces
+`deals_stock_not_exceeded`. The asynchronous commit still applies.

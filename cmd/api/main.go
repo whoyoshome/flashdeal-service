@@ -140,7 +140,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	clk := clock.System{}
 	ids := uuidgen.V7{}
 	txm := postgres.NewTxManager(pool)
-	dealRepo := postgres.NewDealRepo(pool)
+	dealRepo := postgres.NewDealRepo(pool, cfg.StockShards)
 	resRepo := postgres.NewReservationRepo(pool)
 	orderRepo := postgres.NewOrderRepo(pool)
 	// Redis rejects most requests in memory; only as many as there are units

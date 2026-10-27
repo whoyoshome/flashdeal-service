@@ -112,9 +112,14 @@ func uniqueID() string {
 // uniqueUser returns a user ID no other test uses.
 func uniqueUser() string { return fmt.Sprintf("user-%d", idSeq.Add(1)) }
 
+// testShards is how many stock shards test deals get unless overridden, so
+// every test exercises a deal whose stock spans several rows.
+const testShards = 4
+
 type dealOpts struct {
 	stock    int
 	limit    int
+	shards   int
 	startsAt time.Time
 	endsAt   time.Time
 }
@@ -127,6 +132,9 @@ func createDeal(t *testing.T, opts dealOpts) domain.Deal {
 	}
 	if opts.limit == 0 {
 		opts.limit = 5
+	}
+	if opts.shards == 0 {
+		opts.shards = testShards
 	}
 	if opts.startsAt.IsZero() {
 		opts.startsAt = t0.Add(-time.Hour)
@@ -147,9 +155,40 @@ func createDeal(t *testing.T, opts dealOpts) domain.Deal {
 	})
 	require.NoError(t, err)
 
-	stored, err := postgres.NewDealRepo(testPool).Create(t.Context(), d)
+	stored, err := postgres.NewDealRepo(testPool, opts.shards).Create(t.Context(), d)
 	require.NoError(t, err)
 	return stored
+}
+
+// shardState is one stock shard as stored.
+type shardState struct {
+	Capacity, Reserved, Sold int
+}
+
+// loadShards reads a deal's stock shards in shard order.
+func loadShards(t *testing.T, dealID int64) []shardState {
+	t.Helper()
+	rows, err := testPool.Query(t.Context(),
+		`SELECT capacity, reserved, sold FROM deal_stock_shards WHERE deal_id = $1 ORDER BY shard`, dealID)
+	require.NoError(t, err)
+	defer rows.Close()
+	var shards []shardState
+	for rows.Next() {
+		var s shardState
+		require.NoError(t, rows.Scan(&s.Capacity, &s.Reserved, &s.Sold))
+		shards = append(shards, s)
+	}
+	require.NoError(t, rows.Err())
+	return shards
+}
+
+// reservationShard reads the stock shard a reservation took its units from.
+func reservationShard(t *testing.T, id string) int {
+	t.Helper()
+	var shard int
+	require.NoError(t, testPool.QueryRow(t.Context(),
+		`SELECT stock_shard FROM reservations WHERE id = $1`, id).Scan(&shard))
+	return shard
 }
 
 // newReservation builds a pending reservation created at t0.
@@ -170,7 +209,7 @@ func newReservation(t *testing.T, dealID int64, userID, key string, qty int) dom
 // reloadDeal reads the deal's current counters.
 func reloadDeal(t *testing.T, id int64) domain.Deal {
 	t.Helper()
-	d, err := postgres.NewDealRepo(testPool).GetByID(t.Context(), id)
+	d, err := postgres.NewDealRepo(testPool, testShards).GetByID(t.Context(), id)
 	require.NoError(t, err)
 	return d
 }
