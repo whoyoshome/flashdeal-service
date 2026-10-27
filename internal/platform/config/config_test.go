@@ -46,6 +46,9 @@ func TestLoad(t *testing.T) {
 		require.InDelta(t, 50.0, cfg.RateLimitRPS, 0)
 		require.Equal(t, 100, cfg.RateLimitBurst)
 		require.Equal(t, 8, cfg.StockShards)
+		require.Equal(t, config.Outbox{
+			Every: time.Second, BatchSize: 100, Stream: "flashdeal:events", StreamMaxLen: 100000,
+		}, cfg.Outbox)
 		require.Equal(t, testPostgresURL, cfg.Postgres.URL)
 		require.EqualValues(t, 20, cfg.Postgres.MaxConns)
 		require.EqualValues(t, 2, cfg.Postgres.MinConns)
@@ -211,6 +214,9 @@ func TestLoadValidation(t *testing.T) {
 		{name: "rejects a negative rate limit", env: []string{"RATE_LIMIT_RPS=-1"}},
 		{name: "rejects zero stock shards", env: []string{"STOCK_SHARDS=0"}},
 		{name: "rejects more stock shards than the maximum", env: []string{"STOCK_SHARDS=257"}},
+		{name: "rejects a non-positive outbox interval", env: []string{"OUTBOX_EVERY=0s"}},
+		{name: "rejects a non-positive outbox batch size", env: []string{"OUTBOX_BATCH_SIZE=0"}},
+		{name: "rejects a non-positive outbox stream length", env: []string{"OUTBOX_STREAM_MAXLEN=0"}},
 		{name: "rejects a non-positive burst when rate limiting is on", env: []string{"RATE_LIMIT_RPS=10", "RATE_LIMIT_BURST=0"}},
 	}
 

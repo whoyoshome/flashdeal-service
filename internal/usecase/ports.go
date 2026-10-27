@@ -182,7 +182,41 @@ type GateRepair interface {
 
 // OrderRepository stores orders.
 type OrderRepository interface {
-	// Create persists o; it returns domain.ErrAlreadyExists when the
-	// reservation already has an order.
+	// Create persists o together with its EventOrderConfirmed outbox event,
+	// atomically, so no order exists without its event. It returns
+	// domain.ErrAlreadyExists when the reservation already has an order.
 	Create(ctx context.Context, o domain.Order) error
+}
+
+// EventOrderConfirmed is the type of the event recorded for every order.
+const EventOrderConfirmed = "order.confirmed"
+
+// OutboxEvent is an event recorded in the same transaction as the change it
+// describes and not yet published. Payload is the encoded event body, opaque
+// to the use cases.
+type OutboxEvent struct {
+	// ID orders events and lets consumers drop a redelivered one.
+	ID          int64
+	Type        string
+	AggregateID string
+	Payload     []byte
+	OccurredAt  time.Time
+}
+
+// OutboxQueue hands out recorded events for publishing.
+type OutboxQueue interface {
+	// LockPending returns up to limit events, oldest first, locked until the
+	// surrounding transaction ends. Events another transaction holds are
+	// skipped, so relays on any number of replicas take disjoint batches.
+	LockPending(ctx context.Context, limit int) ([]OutboxEvent, error)
+	// Remove deletes published events. It returns domain.ErrCorruptState if
+	// any of them is already gone.
+	Remove(ctx context.Context, ids []int64) error
+}
+
+// EventPublisher delivers events to consumers outside the service.
+type EventPublisher interface {
+	// Publish delivers every event in events, in order. On error some of
+	// them may have been delivered.
+	Publish(ctx context.Context, events []OutboxEvent) error
 }

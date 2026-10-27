@@ -66,6 +66,8 @@ type Config struct {
 	// over, so concurrent reservations do not queue on one row lock. A deal
 	// never gets more shards than units. Existing deals keep theirs.
 	StockShards int `env:"STOCK_SHARDS" envDefault:"8"`
+	// Outbox configures the relay that publishes order.confirmed events.
+	Outbox Outbox `envPrefix:"OUTBOX_"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
@@ -84,6 +86,20 @@ type Auth struct {
 	// JWKSURL, when set, selects RS256 verification against that JWKS
 	// document instead of HS256. Example: https://idp/.well-known/jwks.json.
 	JWKSURL string `env:"JWKS_URL"`
+}
+
+// Outbox configures the outbox relay (ADR 0012).
+type Outbox struct {
+	// Every is how often each replica publishes recorded events; an event
+	// reaches the stream at most this late while the stream is up.
+	Every time.Duration `env:"EVERY" envDefault:"1s"`
+	// BatchSize bounds how many events one relay transaction locks.
+	BatchSize int `env:"BATCH_SIZE" envDefault:"100"`
+	// Stream is the Redis Stream events are appended to.
+	Stream string `env:"STREAM" envDefault:"flashdeal:events"`
+	// StreamMaxLen trims the stream to about this many entries; a consumer
+	// further behind than that loses events.
+	StreamMaxLen int64 `env:"STREAM_MAXLEN" envDefault:"100000"`
 }
 
 // Postgres configures the pgx connection pool.
@@ -172,6 +188,7 @@ func (c Config) validate() error {
 		positive("EXPIRE_EVERY", c.ExpireEvery),
 		positive("RECONCILE_EVERY", c.ReconcileEvery),
 		positive("STOCK_SAMPLE_EVERY", c.StockSampleEvery),
+		positive("OUTBOX_EVERY", c.Outbox.Every),
 		positive("POSTGRES_CONNECT_TIMEOUT", c.Postgres.ConnectTimeout),
 		positive("POSTGRES_STATEMENT_TIMEOUT", c.Postgres.StatementTimeout),
 		positive("REDIS_DIAL_TIMEOUT", c.Redis.DialTimeout),
@@ -186,6 +203,12 @@ func (c Config) validate() error {
 	}
 	if c.ExpireBatchSize <= 0 {
 		errs = append(errs, errors.New("EXPIRE_BATCH_SIZE must be positive"))
+	}
+	if c.Outbox.BatchSize <= 0 {
+		errs = append(errs, errors.New("OUTBOX_BATCH_SIZE must be positive"))
+	}
+	if c.Outbox.StreamMaxLen <= 0 {
+		errs = append(errs, errors.New("OUTBOX_STREAM_MAXLEN must be positive"))
 	}
 	// The longest operation that can leave Redis and PostgreSQL disagreeing is
 	// a reservation: REQUEST_TIMEOUT, then a detached COMMIT (2s) and a gate

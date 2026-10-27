@@ -1,10 +1,12 @@
 package postgres
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/whoyoshome/flashdeal-service/internal/domain"
+	"github.com/whoyoshome/flashdeal-service/internal/usecase"
 )
 
 // Row structs mirror table columns and never leave this package; they are
@@ -101,4 +103,45 @@ func (r reservationRow) toDomain() (domain.Reservation, error) {
 		CreatedAt:      r.CreatedAt,
 		UpdatedAt:      r.UpdatedAt,
 	})
+}
+
+// orderConfirmedPayload is the body of the order.confirmed event. Its JSON
+// is a contract with the consumers (ADR 0012): add fields, never rename or
+// remove them.
+type orderConfirmedPayload struct {
+	OrderID       string    `json:"order_id"`
+	ReservationID string    `json:"reservation_id"`
+	DealID        int64     `json:"deal_id"`
+	UserID        string    `json:"user_id"`
+	Quantity      int       `json:"quantity"`
+	TotalCents    int64     `json:"total_cents"`
+	Currency      string    `json:"currency"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func orderConfirmedEvent(o domain.Order) ([]byte, error) {
+	return json.Marshal(orderConfirmedPayload{
+		OrderID: o.ID(), ReservationID: o.ReservationID(), DealID: o.DealID(), UserID: o.UserID(),
+		Quantity: o.Quantity(), TotalCents: o.Total().Amount(), Currency: o.Total().Currency(),
+		CreatedAt: o.CreatedAt(),
+	})
+}
+
+type outboxRow struct {
+	ID          int64
+	EventType   string
+	AggregateID string
+	Payload     []byte
+	OccurredAt  time.Time
+}
+
+func (r *outboxRow) scanTargets() []any {
+	return []any{&r.ID, &r.EventType, &r.AggregateID, &r.Payload, &r.OccurredAt}
+}
+
+func (r outboxRow) toEvent() usecase.OutboxEvent {
+	return usecase.OutboxEvent{
+		ID: r.ID, Type: r.EventType, AggregateID: r.AggregateID,
+		Payload: r.Payload, OccurredAt: r.OccurredAt.UTC(),
+	}
 }

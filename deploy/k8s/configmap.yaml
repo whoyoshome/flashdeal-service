@@ -25,6 +25,9 @@ data:
   RATE_LIMIT_RPS: "50"
   RATE_LIMIT_BURST: "100"
   STOCK_SHARDS: "8"
+  # order.confirmed events, at least once (ADR 0012)
+  OUTBOX_EVERY: "1s"
+  OUTBOX_STREAM: "flashdeal:events"
   # Open the whole pool at startup: a flash sale's first burst should not
   # pay for connection setup (ADR 0011).
   POSTGRES_MAX_CONNS: "20"
