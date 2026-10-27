@@ -112,14 +112,25 @@ func TestLoad(t *testing.T) {
 		require.Equal(t, "POSTGRES_URL", notSet.Key)
 	})
 
-	t.Run("returns VarIsNotSetError when JWT_SECRET is missing", func(t *testing.T) {
+	t.Run("rejects a missing JWT_SECRET when JWKS is not configured", func(t *testing.T) {
 		t.Parallel()
 
 		_, err := config.Load([]string{"POSTGRES_URL=" + testPostgresURL})
 
-		var notSet env.VarIsNotSetError
-		require.ErrorAs(t, err, &notSet)
-		require.Equal(t, "JWT_SECRET", notSet.Key)
+		require.ErrorIs(t, err, config.ErrInvalid)
+	})
+
+	t.Run("allows an empty JWT_SECRET when JWKS URL is set", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := config.Load([]string{
+			"POSTGRES_URL=" + testPostgresURL,
+			"JWT_JWKS_URL=https://idp.example/.well-known/jwks.json",
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, "https://idp.example/.well-known/jwks.json", cfg.Auth.JWKSURL)
+		require.Empty(t, cfg.Auth.Secret)
 	})
 
 	t.Run("returns a parse error when LOG_LEVEL is unknown", func(t *testing.T) {

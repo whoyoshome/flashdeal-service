@@ -11,12 +11,13 @@ info:
     Every error uses the same body: `{"code", "message", "request_id"}`.
     Clients may branch on `code`, which is stable.
 
-    Authentication uses Bearer JWTs (HS256). Claims: `sub` (user id),
-    `role` (`user` or `admin`), `iss`, `iat`, `exp`. Create/activate deals
-    require `role=admin`. Authenticated routes are rate-limited per `sub`
-    with a Redis token bucket (`429 RATE_LIMITED`). Public deal reads,
-    health and metrics stay open. Locally mint tokens with `make token`
-    (same secret as `JWT_SECRET`).
+    Authentication uses Bearer JWTs. Locally HS256 (`JWT_SECRET`); set
+    `JWT_JWKS_URL` for RS256 keys from an OIDC IdP. Claims: `sub` (user
+    id), `role` (`user` or `admin`), `iss`, `iat`, `exp`. Create/activate
+    deals require `role=admin`. Authenticated routes are rate-limited per
+    `sub` with a Redis token bucket (`429 RATE_LIMITED`). Public deal
+    reads, health and metrics stay open. Locally mint tokens with
+    `make token` (same secret as `JWT_SECRET`).
   license:
     name: MIT
     identifier: MIT

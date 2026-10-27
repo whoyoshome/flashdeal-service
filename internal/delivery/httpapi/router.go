@@ -12,7 +12,6 @@ import (
 
 	"github.com/whoyoshome/flashdeal-service/internal/delivery/httpapi/middleware"
 	"github.com/whoyoshome/flashdeal-service/internal/domain"
-	"github.com/whoyoshome/flashdeal-service/internal/platform/auth"
 	"github.com/whoyoshome/flashdeal-service/internal/usecase"
 )
 
@@ -65,8 +64,8 @@ type Deps struct {
 	Confirm Confirmer
 	Cancel  Canceller
 
-	// Tokens verifies Bearer JWTs. Required for authenticated routes.
-	Tokens *auth.Service
+	// Tokens verifies Bearer JWTs (HS256 or JWKS/RS256). Required.
+	Tokens middleware.Authenticator
 
 	// RateLimiter bounds authenticated callers. Nil disables it.
 	RateLimiter middleware.RateLimiter
