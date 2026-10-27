@@ -70,6 +70,12 @@ type Config struct {
 	StockShards int `env:"STOCK_SHARDS" envDefault:"32"`
 	// Outbox configures the relay that publishes order.confirmed events.
 	Outbox Outbox `envPrefix:"OUTBOX_"`
+	// DemoEnabled serves the clickable demo UI at GET / and POST /v1/demo/session.
+	// For public portfolio deploys only (ADR 0015). Requires JWT_SECRET (HS256).
+	DemoEnabled bool `env:"DEMO_ENABLED" envDefault:"false"`
+	// MigrateOnStart applies pending migrations before the HTTP server starts.
+	// Use on single-service hosts (Render) that have no separate migrate Job.
+	MigrateOnStart bool `env:"MIGRATE_ON_START" envDefault:"false"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
@@ -126,6 +132,9 @@ type Tracing struct {
 
 // Redis configures the go-redis client.
 type Redis struct {
+	// URL, when set, is a redis:// or rediss:// connection string (Upstash,
+	// Redis Cloud). It replaces Addr, Password and DB.
+	URL  string `env:"URL"`
 	Addr string `env:"ADDR" envDefault:"localhost:6379"`
 	// Password is a secret: never log it.
 	Password string `env:"PASSWORD"`
@@ -241,6 +250,14 @@ func (c Config) validate() error {
 	}
 	if c.RateLimitRPS > 0 && c.RateLimitBurst <= 0 {
 		errs = append(errs, errors.New("RATE_LIMIT_BURST must be positive when rate limiting is enabled"))
+	}
+	if c.DemoEnabled {
+		if len(c.Auth.Secret) < 32 {
+			errs = append(errs, errors.New("DEMO_ENABLED requires JWT_SECRET of at least 32 bytes to mint demo tokens"))
+		}
+		if c.Auth.JWKSURL != "" {
+			errs = append(errs, errors.New("DEMO_ENABLED is incompatible with JWT_JWKS_URL"))
+		}
 	}
 
 	if err := errors.Join(errs...); err != nil {

@@ -81,6 +81,20 @@ deploy/                 Prometheus, Grafana, and Kubernetes manifests (hardened 
 test/                   e2e, chaos and k6 load tests with their results
 ```
 
+## Live demo
+
+After you deploy with Neon + Upstash + Render (see
+[`deploy/cloud/README.md`](deploy/cloud/README.md)), put the HTTPS URL here
+and in the GitHub repo homepage so a recruiter can click through without
+Docker:
+
+**https://YOUR-SERVICE.onrender.com** ← replace after the first deploy
+
+On that page: **Start demo sale** → **Reserve 1 unit** → **Confirm order**.
+Each visitor gets a private 5-unit deal and a short-lived JWT
+([ADR 0015](docs/adr/0015-public-demo-mode.md)). Free Render may cold-start
+for 30–60 seconds on the first request.
+
 ## Quick start
 
 You need Docker with Compose v2 and GNU make. One command starts the API,
@@ -294,6 +308,7 @@ obvious has an architecture decision record:
 | [0012](docs/adr/0012-transactional-outbox.md) | Publish `order.confirmed` to a Redis Stream through a transactional outbox |
 | [0013](docs/adr/0013-single-statement-reservation.md) | Reserve in a single statement when a stock shard is free |
 | [0014](docs/adr/0014-payment-gateway-port.md) | Charge through a `PaymentGateway` port before confirming |
+| [0015](docs/adr/0015-public-demo-mode.md) | Public clickable demo (`DEMO_ENABLED`) on Render + Neon + Upstash |
 
 ## Technical overview
 

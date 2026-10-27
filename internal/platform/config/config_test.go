@@ -137,6 +137,33 @@ func TestLoad(t *testing.T) {
 		require.Empty(t, cfg.Auth.Secret)
 	})
 
+	t.Run("accepts demo mode and migrate-on-start with a Redis URL", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := config.Load(baseEnv(
+			"DEMO_ENABLED=true",
+			"MIGRATE_ON_START=true",
+			"REDIS_URL=rediss://default:token@example.upstash.io:6379",
+		))
+
+		require.NoError(t, err)
+		require.True(t, cfg.DemoEnabled)
+		require.True(t, cfg.MigrateOnStart)
+		require.Equal(t, "rediss://default:token@example.upstash.io:6379", cfg.Redis.URL)
+	})
+
+	t.Run("rejects demo mode without a JWT secret", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := config.Load([]string{
+			"POSTGRES_URL=" + testPostgresURL,
+			"JWT_JWKS_URL=https://idp.example/.well-known/jwks.json",
+			"DEMO_ENABLED=true",
+		})
+
+		require.ErrorIs(t, err, config.ErrInvalid)
+	})
+
 	t.Run("returns a parse error when LOG_LEVEL is unknown", func(t *testing.T) {
 		t.Parallel()
 
