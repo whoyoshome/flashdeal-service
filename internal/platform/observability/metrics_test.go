@@ -66,6 +66,16 @@ func TestMetrics(t *testing.T) {
 		require.Contains(t, out, "stock_gate_repairs_total 1")
 	})
 
+	t.Run("exports every known reservation outcome at zero before the first attempt", func(t *testing.T) {
+		t.Parallel()
+
+		out := scrape(t, observability.NewMetrics().Handler())
+
+		require.Contains(t, out, `reservations_total{result="created"} 0`)
+		require.Contains(t, out, `reservations_total{result="sold_out"} 0`)
+		require.Contains(t, out, `reservations_total{result="request_timeout"} 0`)
+	})
+
 	t.Run("replaces stock levels so deals that closed disappear", func(t *testing.T) {
 		t.Parallel()
 		m := observability.NewMetrics()

@@ -67,7 +67,19 @@ func NewMetrics() *Metrics {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.httpRequests, m.httpDuration, m.reservations, m.expired, m.repairs, m.stock,
 	)
+	for _, result := range reservationResults {
+		m.reservations.WithLabelValues(result)
+	}
 	return m
+}
+
+// reservationResults are the outcomes exported from the start at zero. A
+// series that only appears with its first increment hides that increment
+// from rate() and increase(): the first reservations of a flash sale, which
+// all arrive within one scrape interval, would go uncounted.
+var reservationResults = []string{
+	"created", "sold_out", "user_limit_reached", "deal_not_active", "stock_unavailable",
+	"request_timeout", "validation_error", "not_found", "conflict", "internal",
 }
 
 // Handler serves the registry in the Prometheus exposition format.
