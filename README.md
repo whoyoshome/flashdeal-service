@@ -259,6 +259,7 @@ while the units are written
 - [Phase 7: the write path, profiled and fixed](test/load/results/write-path.md)
 - [Phase 7: chaos under load](test/load/results/chaos.md)
 - [JWT authentication: both scenarios measured again](test/load/results/jwt-auth.md)
+- [Multi-replica on kind (2 pods): zero oversell](test/load/results/multi-replica.md)
 
 ## Design decisions
 
@@ -450,16 +451,17 @@ Limitations, all documented where they are decided:
   ([ADR 0008](docs/adr/0008-jwt-authentication.md),
   [ADR 0010](docs/adr/0010-oidc-jwks-verification.md)).
 - **Payments are simulated.** Confirmation assumes the payment succeeded.
-- **One replica measured.** Load was measured on one replica on a shared
-  4-CPU VM. Replicas are stateless by design; K8s manifests include an HPA,
-  but no multi-replica load test has been run yet.
+- **Replicas are measured.** Single-replica numbers are in the load
+  results above. A kind cluster with **2 API pods** behind one Service
+  also sold out 1 000 units with zero oversell
+  ([multi-replica.md](test/load/results/multi-replica.md)); CI's
+  `k8s-smoke` job keeps that Deployment honest on every PR.
 
 Next steps:
 
 1. **Stock shards.** Split a deal's counters over several rows to raise
    per-deal write throughput and bring the reservation p99 under target.
 2. **A transactional outbox** to publish `order.confirmed` events.
-3. **Multi-replica load test** on the Kubernetes deployment.
 
 ## How I Used AI
 
