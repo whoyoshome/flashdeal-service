@@ -17,6 +17,7 @@ func TestRun(t *testing.T) {
 
 		err := run(t.Context(), []string{
 			"POSTGRES_URL=postgres://localhost:5432/db",
+			"JWT_SECRET=test-secret-at-least-32-bytes-long!!",
 			"SHUTDOWN_TIMEOUT=0s",
 		}, io.Discard)
 

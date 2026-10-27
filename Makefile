@@ -20,7 +20,13 @@ LOAD_SUMMARY  ?= test/load/results/latest.json
 # run only the API and its stores.
 PROFILES      ?= --profile observability
 
-.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api load build tidy
+# Shared with docker-compose.yml for local tokens (make token, k6, e2e).
+JWT_SECRET ?= flashdeal-local-dev-secret-change-me!!
+JWT_ISSUER ?= flashdeal
+TOKEN_SUB  ?= alice
+TOKEN_ROLE ?= user
+
+.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api load build tidy token
 
 ## check: lint and unit tests (required before declaring a task done)
 check: lint test
@@ -29,6 +35,7 @@ check: lint test
 demo: up migrate
 	docker run --rm --network $(K6_NETWORK) -v "$(CURDIR)/test/load:/load" \
 		-e STOCK=1000 -e PEAK_RPS=2000 -e RAMP=2s -e HOLD=10s -e THRESHOLDS=correctness \
+		-e JWT_SECRET=$(JWT_SECRET) -e JWT_ISSUER=$(JWT_ISSUER) \
 		$(K6_IMAGE) run /load/flash_sale.js
 # Plain echo text, no quotes or shell metacharacters: make may run recipes
 # with sh or with cmd.exe, which would print quotes literally.
@@ -81,11 +88,16 @@ lint-api:
 load:
 	docker run --rm --network $(K6_NETWORK) -v "$(CURDIR)/test/load:/load" \
 		-e STOCK -e PEAK_RPS -e RAMP -e HOLD -e BASE_URL -e THRESHOLDS \
+		-e JWT_SECRET=$(JWT_SECRET) -e JWT_ISSUER=$(JWT_ISSUER) \
 		$(K6_IMAGE) run --summary-export=/load/results/$(notdir $(LOAD_SUMMARY)) /load/flash_sale.js
+
+## token: mint a local JWT (TOKEN_SUB=alice TOKEN_ROLE=admin make token)
+token:
+	$(GO) run ./cmd/token -secret "$(JWT_SECRET)" -issuer "$(JWT_ISSUER)" -sub "$(TOKEN_SUB)" -role "$(TOKEN_ROLE)"
 
 ## build: compile the API binary into bin/
 build:
-	$(GO) build -trimpath -o bin/ ./cmd/api
+	$(GO) build -trimpath -o bin/ ./cmd/api ./cmd/token
 
 ## tidy: sync go.mod and go.sum with the imports
 tidy:

@@ -12,6 +12,7 @@ import (
 
 	"github.com/whoyoshome/flashdeal-service/internal/delivery/httpapi/middleware"
 	"github.com/whoyoshome/flashdeal-service/internal/domain"
+	"github.com/whoyoshome/flashdeal-service/internal/platform/auth"
 	"github.com/whoyoshome/flashdeal-service/internal/usecase"
 )
 
@@ -63,6 +64,9 @@ type Deps struct {
 	Reserve Reserver
 	Confirm Confirmer
 	Cancel  Canceller
+
+	// Tokens verifies Bearer JWTs. Required for authenticated routes.
+	Tokens *auth.Service
 
 	// Idempotency stores reservation responses by Idempotency-Key. Nil
 	// disables the middleware (handler tests).
@@ -124,14 +128,14 @@ func NewRouter(d Deps) http.Handler {
 		}
 		r.Use(middleware.Logging(d.Log), middleware.Metrics(metrics), middleware.Timeout(d.RequestTimeout))
 
-		// Admin endpoints are not authenticated yet (pending, see README).
-		r.Post("/deals", h.createDeal)
-		r.Post("/deals/{id}/activate", h.activateDeal)
+		// Public reads: deal snapshots are approximate and not sensitive.
 		r.Get("/deals", h.listDeals)
 		r.Get("/deals/{id}", h.getDeal)
 
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth)
+			r.Use(middleware.Auth(d.Tokens))
+			r.With(middleware.RequireAdmin).Post("/deals", h.createDeal)
+			r.With(middleware.RequireAdmin).Post("/deals/{id}/activate", h.activateDeal)
 			r.With(idempotency(d)...).Post("/deals/{id}/reservations", h.reserve)
 			r.Post("/reservations/{id}/confirm", h.confirm)
 			r.Delete("/reservations/{id}", h.cancel)

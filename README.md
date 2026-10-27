@@ -28,7 +28,7 @@ the first seconds. Done naively, it goes wrong in several ways at once:
 
 ```mermaid
 flowchart TB
-    client["Client"] -->|"POST /v1/deals/:id/reservations<br/>X-User-ID, Idempotency-Key"| mw
+    client["Client"] -->|"POST /v1/deals/:id/reservations<br/>Bearer JWT, Idempotency-Key"| mw
 
     subgraph api["Go API"]
         mw["chi middleware<br/>request ID, recover, trace, log, metrics,<br/>timeout, auth, idempotency"] --> reserve["Reserve use case"]
@@ -72,7 +72,7 @@ internal/worker/        expirer, reconciler and stock sampler
 internal/platform/      config, logging, clock, IDs, metrics and tracing
 migrations/             SQL schema
 api/openapi.yaml        HTTP contract
-deploy/                 Prometheus and Grafana provisioning, versioned dashboard
+deploy/                 Prometheus, Grafana, and Kubernetes manifests (probes, HPA)
 test/                   e2e, chaos and k6 load tests with their results
 ```
 
@@ -98,16 +98,21 @@ for another sale, and `make down` to stop everything.
 | Jaeger     | <http://localhost:16686>             |
 | pprof      | <http://localhost:6060/debug/pprof/> |
 
-Everything except the API is bound to `127.0.0.1`. To try the API by hand:
+Postgres, Redis, the API, pprof, Grafana, Prometheus and Jaeger bind to
+`127.0.0.1` on the host. To try the API by hand (Bearer JWTs; mint with
+`make token`):
 
 ```bash
 make up && make migrate
-curl -s -X POST localhost:8080/v1/deals -H 'Content-Type: application/json' \
+ADMIN=$(TOKEN_ROLE=admin TOKEN_SUB=ops make token)
+USER=$(TOKEN_SUB=alice TOKEN_ROLE=user make token)
+curl -s -X POST localhost:8080/v1/deals -H "Authorization: Bearer $ADMIN" \
+  -H 'Content-Type: application/json' \
   -d '{"product_id":"sku-1","title":"Headphones","price_cents":4999,"currency":"USD","total_stock":3,"per_user_limit":1,"starts_at":"2026-01-01T00:00:00Z","ends_at":"2030-01-01T00:00:00Z"}'
 # Use the "id" returned above: 1 on a fresh database.
-curl -s -X POST localhost:8080/v1/deals/1/activate
+curl -s -X POST localhost:8080/v1/deals/1/activate -H "Authorization: Bearer $ADMIN"
 curl -s -X POST localhost:8080/v1/deals/1/reservations -H 'Content-Type: application/json' \
-  -H 'X-User-ID: alice' -H 'Idempotency-Key: alice-1' -d '{"quantity":1}'
+  -H "Authorization: Bearer $USER" -H 'Idempotency-Key: alice-1' -d '{"quantity":1}'
 ```
 
 To develop, you also need Go (the version is pinned in `go.mod`, and the
@@ -257,22 +262,35 @@ obvious has an architecture decision record:
 | [0005](docs/adr/0005-stock-gate-reconciliation.md) | Reconcile the gate only on stable drift, with compare-and-set |
 | [0006](docs/adr/0006-asynchronous-commit-for-reservations.md) | Commit reservation transactions asynchronously |
 | [0007](docs/adr/0007-fail-fast-redis-client.md) | Fail fast when Redis is down: no client retries |
+| [0008](docs/adr/0008-jwt-authentication.md) | Bearer JWT (HS256) with `user` / `admin` roles |
+
+## Technical overview
+
+| Area | Implementation |
+| --- | --- |
+| Go backend & Clean Architecture | `delivery → usecase → domain`, enforced by `depguard` |
+| HTTP/REST | Versioned `/v1` API, OpenAPI 3.1, stable error codes |
+| AuthN / AuthZ (JWT) | Bearer HS256, `sub` + `role`; admin routes require `admin` ([ADR 0008](docs/adr/0008-jwt-authentication.md)) |
+| Distributed correctness | Redis Lua gate + PostgreSQL `CHECK`, compensation, reconciler |
+| Observability | `slog` JSON, Prometheus business metrics, OpenTelemetry → Jaeger, pprof |
+| CI/CD | GitHub Actions: lint, `govulncheck`, unit, integration, e2e, image; Dependabot |
+| Containers & Kubernetes | Multi-stage distroless image; manifests under [`deploy/k8s/`](deploy/k8s/) (Deployment, probes, HPA) |
 
 ## API
 
 The full contract is in [`api/openapi.yaml`](api/openapi.yaml). Every error
 uses the body `{"code", "message", "request_id"}`, and clients may branch on
-`code`.
+`code`. Authenticated routes expect `Authorization: Bearer <JWT>`.
 
 | Method   | Path                            | Purpose                                                        |
 | -------- | ------------------------------- | -------------------------------------------------------------- |
-| `POST`   | `/v1/deals`                     | Create a deal (admin)                                          |
-| `POST`   | `/v1/deals/{id}/activate`       | Open a deal's stock for reservations (admin)                  |
+| `POST`   | `/v1/deals`                     | Create a deal (`role=admin`)                                   |
+| `POST`   | `/v1/deals/{id}/activate`       | Open a deal's stock for reservations (`role=admin`)            |
 | `GET`    | `/v1/deals/{id}`                | Get a deal with its approximate available stock                |
 | `GET`    | `/v1/deals?status=active`       | List active deals (cursor pagination)                          |
-| `POST`   | `/v1/deals/{id}/reservations`   | Reserve units; needs `X-User-ID` and `Idempotency-Key`         |
-| `POST`   | `/v1/reservations/{id}/confirm` | Confirm a reservation and create its order (`X-User-ID`)       |
-| `DELETE` | `/v1/reservations/{id}`         | Cancel a pending reservation (`X-User-ID`)                     |
+| `POST`   | `/v1/deals/{id}/reservations`   | Reserve units; needs Bearer JWT and `Idempotency-Key`          |
+| `POST`   | `/v1/reservations/{id}/confirm` | Confirm a reservation and create its order                     |
+| `DELETE` | `/v1/reservations/{id}`         | Cancel a pending reservation                                   |
 | `GET`    | `/healthz`                      | Liveness: the process is up (never checks dependencies)        |
 | `GET`    | `/readyz`                       | Readiness: PostgreSQL and Redis are reachable (`200` or `503`) |
 | `GET`    | `/metrics`                      | Prometheus metrics                                             |
@@ -405,23 +423,23 @@ Limitations, all documented where they are decided:
 - **Redis restart without its data.** The service fails closed until the
   deals are activated again. Activation is idempotent; the reconciler does
   not reload the gate on its own.
-- **Authentication is a placeholder.** Admin endpoints are not
-  authenticated, and `X-User-ID` stands in for real authentication. The
-  auth middleware is the seam for JWT.
+- **JWT is HS256 with a shared secret.** Fine for a self-contained demo;
+  production would verify tokens from an OIDC IdP (JWKS / RS256) behind the
+  same `platform/auth` boundary
+  ([ADR 0008](docs/adr/0008-jwt-authentication.md)).
 - **Payments are simulated.** Confirmation assumes the payment succeeded.
 - **One replica measured.** Load was measured on one replica on a shared
-  4-CPU VM. Replicas are stateless by design, but no multi-replica load test
-  has been run.
+  4-CPU VM. Replicas are stateless by design; K8s manifests include an HPA,
+  but no multi-replica load test has been run yet.
 
 Next steps:
 
 1. **Stock shards.** Split a deal's counters over several rows to raise
    per-deal write throughput and bring the reservation p99 under target.
-2. **JWT authentication** behind the existing auth middleware.
+2. **OIDC / JWKS verification** against a real IdP (OAuth 2.0 / OpenID Connect).
 3. **A transactional outbox** to publish `order.confirmed` events.
 4. **Per-user rate limiting** with a token bucket in Redis.
-5. **Kubernetes deployment** with a horizontal autoscaler, and a
-   multi-replica load test.
+5. **Multi-replica load test** on the Kubernetes deployment.
 
 ## How I Used AI
 

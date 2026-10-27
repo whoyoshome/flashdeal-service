@@ -219,7 +219,7 @@ El dominio es directo: una **Deal** (oferta) tiene stock, precio, ventana de vig
 
 Dentro: administración de ofertas, consulta de ofertas, reserva, confirmación, cancelación, expiración, idempotencia, observabilidad y pruebas de carga.
 
-Fuera (simulado o delegado): pagos reales (la confirmación asume pago aprobado), autenticación completa (el usuario llega en el header `X-User-ID`, detrás de un middleware reemplazable por JWT), catálogo de productos y notificaciones.
+Fuera (simulado o delegado): pagos reales (la confirmación asume pago aprobado), un proveedor de identidad real (el usuario llega en un JWT HS256 firmado con un secreto compartido; integrar OAuth 2.0 / OIDC con JWKS queda fuera, ver ADR 0008), catálogo de productos y notificaciones.
 
 ### Requisitos no funcionales (objetivos a medir con k6)
 
@@ -254,7 +254,7 @@ La regla en Go: **las interfaces se declaran donde se consumen** (en `usecase`),
 
 ### Flujo de datos: Delivery → UseCase → Repository
 
-1. **Delivery** recibe `POST /v1/deals/{id}/reservations`, valida el body (cantidad > 0), lee `X-User-ID` e `Idempotency-Key`, y construye un `usecase.ReserveInput`. Nunca pasa `*http.Request` hacia abajo.
+1. **Delivery** recibe `POST /v1/deals/{id}/reservations`, valida el body (cantidad > 0), toma el usuario del `sub` del JWT (validado por el middleware de auth), lee `Idempotency-Key`, y construye un `usecase.ReserveInput`. Nunca pasa `*http.Request` hacia abajo.
 2. **UseCase** (`Reserve.Execute`) obtiene la oferta (caché + `singleflight`), valida invariantes de dominio (`deal.CanReserve(now, qty)`), y llama al port `StockGate.TryReserve`.
 3. **Repository Redis** ejecuta un script Lua atómico: verifica stock y límite por usuario, decrementa y responde. Si no hay stock, devuelve `domain.ErrSoldOut` y el flujo termina sin tocar PostgreSQL.
 4. **UseCase** crea la entidad `domain.Reservation` y llama a `ReservationRepository.Create` dentro de una transacción (`TxManager.WithinTx`).
@@ -335,7 +335,7 @@ flashdeal-service/
 │   │           ├── logging.go
 │   │           ├── recoverer.go
 │   │           ├── timeout.go
-│   │           ├── auth.go          # X-User-ID hoy, JWT mañana
+│   │           ├── auth.go          # JWT Bearer + RequireAdmin
 │   │           └── metrics.go
 │   ├── repository/
 │   │   ├── postgres/
@@ -845,13 +845,13 @@ Extensiones opcionales si sobra tiempo, en orden de valor: patrón Outbox para p
 
 | Método | Ruta | Descripción | Respuestas |
 | --- | --- | --- | --- |
-| `POST` | `/v1/deals` | Crear oferta (admin) | `201`, `400` |
-| `POST` | `/v1/deals/{id}/activate` | Cargar stock en Redis y abrir la oferta (admin) | `200`, `404`, `409` |
+| `POST` | `/v1/deals` | Crear oferta (JWT con `role=admin`) | `201`, `400`, `401`, `403` |
+| `POST` | `/v1/deals/{id}/activate` | Cargar stock en Redis y abrir la oferta (JWT con `role=admin`) | `200`, `401`, `403`, `404`, `409` |
 | `GET` | `/v1/deals/{id}` | Consultar oferta y stock aproximado | `200`, `404` |
 | `GET` | `/v1/deals?status=active` | Listar ofertas activas (paginado por cursor) | `200` |
-| `POST` | `/v1/deals/{id}/reservations` | Reservar; requiere `X-User-ID` e `Idempotency-Key` | `201`, `400`, `404`, `409`, `503` |
-| `POST` | `/v1/reservations/{id}/confirm` | Confirmar y crear la orden | `200`, `404`, `409`, `410` |
-| `DELETE` | `/v1/reservations/{id}` | Cancelar y devolver stock | `204`, `404`, `409` |
+| `POST` | `/v1/deals/{id}/reservations` | Reservar; requiere `Authorization: Bearer <JWT>` e `Idempotency-Key` | `201`, `400`, `401`, `404`, `409`, `503` |
+| `POST` | `/v1/reservations/{id}/confirm` | Confirmar y crear la orden (JWT) | `200`, `401`, `404`, `409`, `410` |
+| `DELETE` | `/v1/reservations/{id}` | Cancelar y devolver stock (JWT) | `204`, `401`, `404`, `409` |
 | `GET` | `/healthz`, `/readyz` | Liveness y readiness | `200`, `503` |
 | `GET` | `/metrics` | Métricas Prometheus | `200` |
 

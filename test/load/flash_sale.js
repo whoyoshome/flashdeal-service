@@ -19,6 +19,7 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
+import { authHeaders } from './jwt.js';
 
 const BASE_URL = __ENV.BASE_URL || 'http://api:8080';
 const STOCK = Number(__ENV.STOCK || 10000);
@@ -83,8 +84,9 @@ export function setup() {
     starts_at: new Date(now - 60_000).toISOString(),
     ends_at: new Date(now + 3_600_000).toISOString(),
   };
+  const admin = authHeaders('k6-admin', 'admin');
   const res = http.post(`${BASE_URL}/v1/deals`, JSON.stringify(deal), {
-    headers: { 'Content-Type': 'application/json' },
+    headers: admin,
     responseCallback: http.expectedStatuses(201),
   });
   if (res.status !== 201) {
@@ -92,6 +94,7 @@ export function setup() {
   }
   const id = res.json('id');
   const act = http.post(`${BASE_URL}/v1/deals/${id}/activate`, null, {
+    headers: admin,
     responseCallback: http.expectedStatuses(200),
   });
   if (act.status !== 200) {
@@ -110,11 +113,7 @@ export default function (data) {
     `${BASE_URL}/v1/deals/${data.dealId}/reservations`,
     JSON.stringify({ quantity: 1 }),
     {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-User-ID': buyer,
-        'Idempotency-Key': `${buyer}-key`,
-      },
+      headers: authHeaders(buyer, 'user', `${buyer}-key`),
       tags: { name: 'reserve' },
     },
   );
