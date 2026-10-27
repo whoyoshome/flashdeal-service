@@ -489,9 +489,12 @@ Limitations, all documented where they are decided:
 
 Next steps:
 
-1. **Scenario A on real hardware.** Measure 10,000 units at 5,000 rps on
-   dedicated nodes with an in-cluster load generator, not through
-   `kubectl port-forward`.
+1. **Scenario A on dedicated hardware.** The in-cluster k6 Job
+   (`make load-k8s-job`) is ready. On the shared 4-CPU VM, scenario A
+   waits on the database pool at 219–631 ms p99
+   ([k8s-in-cluster.md](test/load/results/k8s-in-cluster.md)). The next
+   run belongs on nodes of their own, with `pg_stat_activity` sampled to
+   find PostgreSQL's limit.
 
 ## How I Used AI
 
