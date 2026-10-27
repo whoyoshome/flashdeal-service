@@ -97,7 +97,14 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	}
 	log := logger.New(stdout, cfg.LogLevel)
 
-	tokens, err := newAuthenticator(cfg.Auth)
+	if cfg.MigrateOnStart {
+		log.InfoContext(ctx, "applying migrations before listen")
+		if err := migrateUp(ctx, environ, stdout); err != nil {
+			return fmt.Errorf("migrate on start: %w", err)
+		}
+	}
+
+	tokens, issuer, err := newAuth(cfg.Auth, cfg.DemoEnabled)
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
@@ -156,6 +163,7 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 	dealQueries := usecase.NewDealQueries(dealCache, dealRepo, clk)
 	reserve := usecase.NewReserve(dealCache, gate, resRepo, clk, ids, cfg.ReservationTTL, log)
 	confirm := usecase.NewConfirm(dealRepo, dealRepo, resRepo, orderRepo, payment.NewAlwaysApprove(), txm, clk, ids)
+	startDemo := usecase.NewStartDemo(dealRepo, gate, clk, ids)
 	cancelReservation := usecase.NewCancel(dealRepo, resRepo, gate, txm, clk, log)
 	expire := usecase.NewExpire(resRepo, dealRepo, gate, txm, clk, cfg.ExpireBatchSize, log)
 	reconcile := usecase.NewReconcile(dealRepo, dealRepo, gate, clk)
@@ -191,6 +199,10 @@ func run(ctx context.Context, environ []string, stdout io.Writer) error {
 				{Name: "redis", Pinger: redisrepo.NewPinger(rdb)},
 			},
 			ReadinessTimeout: cfg.ReadinessTimeout,
+			DemoEnabled:      cfg.DemoEnabled,
+			Demo:             startDemo,
+			Issuer:           issuer,
+			DemoLimiter:      limiter,
 		}),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
@@ -257,11 +269,19 @@ func shutdown(ctx context.Context, name string, srv *http.Server) error {
 	return nil
 }
 
-func newAuthenticator(cfg config.Auth) (middleware.Authenticator, error) {
+func newAuth(cfg config.Auth, demo bool) (middleware.Authenticator, httpapi.TokenIssuer, error) {
 	if cfg.JWKSURL != "" {
-		return auth.NewJWKS(auth.JWKSConfig{URL: cfg.JWKSURL, Issuer: cfg.Issuer})
+		v, err := auth.NewJWKS(auth.JWKSConfig{URL: cfg.JWKSURL, Issuer: cfg.Issuer})
+		return v, nil, err
 	}
-	return auth.New(auth.Config{Secret: cfg.Secret, Issuer: cfg.Issuer})
+	svc, err := auth.New(auth.Config{Secret: cfg.Secret, Issuer: cfg.Issuer})
+	if err != nil {
+		return nil, nil, err
+	}
+	if demo {
+		return svc, svc, nil
+	}
+	return svc, nil, nil
 }
 
 // rateLimitBridge adapts the Redis token bucket to the HTTP middleware port

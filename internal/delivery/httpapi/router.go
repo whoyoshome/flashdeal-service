@@ -89,6 +89,14 @@ type Deps struct {
 	ReadinessChecks []ReadinessCheck
 	// ReadinessTimeout bounds each individual readiness probe.
 	ReadinessTimeout time.Duration
+
+	// DemoEnabled serves GET / and POST /v1/demo/session for the public
+	// demo UI. Requires Demo and Issuer.
+	DemoEnabled bool
+	Demo        DemoStarter
+	Issuer      TokenIssuer
+	// DemoLimiter bounds demo session creation by client IP. Nil skips it.
+	DemoLimiter middleware.RateLimiter
 }
 
 // NewRouter builds the HTTP handler tree. Health and metrics endpoints sit
@@ -109,6 +117,9 @@ func NewRouter(d Deps) http.Handler {
 		canceller:        d.Cancel,
 		readinessChecks:  d.ReadinessChecks,
 		readinessTimeout: d.ReadinessTimeout,
+		demo:             d.Demo,
+		issuer:           d.Issuer,
+		demoLimiter:      d.DemoLimiter,
 	}
 
 	r := chi.NewRouter()
@@ -120,6 +131,9 @@ func NewRouter(d Deps) http.Handler {
 	r.Get("/readyz", h.readiness)
 	if d.MetricsHandler != nil {
 		r.Method(http.MethodGet, "/metrics", d.MetricsHandler)
+	}
+	if d.DemoEnabled && d.Demo != nil && d.Issuer != nil {
+		r.Get("/", h.demoPage)
 	}
 
 	r.Route("/v1", func(r chi.Router) {
@@ -133,6 +147,9 @@ func NewRouter(d Deps) http.Handler {
 		// Public reads: deal snapshots are approximate and not sensitive.
 		r.Get("/deals", h.listDeals)
 		r.Get("/deals/{id}", h.getDeal)
+		if d.DemoEnabled && d.Demo != nil && d.Issuer != nil {
+			r.Post("/demo/session", h.demoSession)
+		}
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Auth(d.Tokens), middleware.RateLimit(d.RateLimiter, d.Log))
@@ -170,6 +187,9 @@ type handlers struct {
 	canceller        Canceller
 	readinessChecks  []ReadinessCheck
 	readinessTimeout time.Duration
+	demo             DemoStarter
+	issuer           TokenIssuer
+	demoLimiter      middleware.RateLimiter
 }
 
 // noMetrics discards observations when no Metrics is configured.

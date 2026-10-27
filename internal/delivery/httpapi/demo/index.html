@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FlashDeal — live demo</title>
+  <style>
+    :root {
+      --bg: #0c0f14;
+      --panel: #141a22;
+      --line: #243042;
+      --text: #e8eef7;
+      --muted: #8b9bb0;
+      --accent: #3dd68c;
+      --warn: #f0b429;
+      --danger: #f07178;
+      --font: "IBM Plex Sans", "Segoe UI", sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; color: var(--text);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1a2a3a 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #122018 0%, transparent 50%),
+        var(--bg);
+      font: 16px/1.5 var(--font);
+    }
+    main {
+      max-width: 40rem; margin: 0 auto; padding: 3rem 1.25rem 4rem;
+    }
+    .brand {
+      font-size: clamp(2.4rem, 8vw, 3.4rem); font-weight: 700; letter-spacing: -0.04em;
+      margin: 0 0 0.35rem;
+    }
+    .lead { color: var(--muted); margin: 0 0 2rem; max-width: 34rem; }
+    .panel {
+      background: color-mix(in srgb, var(--panel) 92%, black);
+      border: 1px solid var(--line); border-radius: 4px; padding: 1.25rem 1.35rem;
+      margin-bottom: 1rem;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+    button {
+      appearance: none; border: 0; border-radius: 3px; padding: 0.7rem 1.1rem;
+      font: 600 0.95rem/1 var(--font); cursor: pointer; color: #04140c;
+      background: var(--accent);
+    }
+    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .stat { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); }
+    .stat strong { color: var(--text); font-weight: 600; }
+    #log {
+      font-family: var(--mono); font-size: 0.78rem; white-space: pre-wrap;
+      color: var(--muted); max-height: 16rem; overflow: auto; margin: 0;
+    }
+    #log .ok { color: var(--accent); }
+    #log .err { color: var(--danger); }
+    #log .info { color: var(--warn); }
+    a { color: var(--accent); }
+    footer { margin-top: 2rem; color: var(--muted); font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 class="brand">FlashDeal</h1>
+    <p class="lead">
+      A flash-sale API that never oversells. This page starts a private 5-unit
+      deal, reserves one unit, and confirms the order against the live API
+      (PostgreSQL + Redis). No account needed.
+    </p>
+
+    <section class="panel">
+      <div class="row" style="margin-bottom: 1rem;">
+        <button id="start" type="button">Start demo sale</button>
+        <button id="reserve" class="secondary" type="button" disabled>Reserve 1 unit</button>
+        <button id="confirm" class="secondary" type="button" disabled>Confirm order</button>
+      </div>
+      <p class="stat">
+        Deal <strong id="deal">—</strong> ·
+        Stock left <strong id="stock">—</strong> ·
+        Reservation <strong id="res">—</strong> ·
+        Order <strong id="order">—</strong>
+      </p>
+    </section>
+
+    <section class="panel">
+      <pre id="log">Ready. Click “Start demo sale”.</pre>
+    </section>
+
+    <footer>
+      Source:
+      <a href="https://github.com/whoyoshome/flashdeal-service">github.com/whoyoshome/flashdeal-service</a>
+      · If the first click is slow, the host may be waking up; wait and retry.
+    </footer>
+  </main>
+  <script>
+    const el = (id) => document.getElementById(id);
+    const log = el("log");
+    let token = "", dealId = null, reservationId = null, idem = "";
+
+    function line(cls, msg) {
+      const span = document.createElement("span");
+      span.className = cls;
+      span.textContent = msg + "\n";
+      if (log.textContent.startsWith("Ready.")) log.textContent = "";
+      log.appendChild(span);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    async function api(method, path, body, headers = {}) {
+      const res = await fetch(path, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: "Bearer " + token } : {}),
+          ...headers,
+        },
+        body: body == null ? undefined : JSON.stringify(body),
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) {}
+      return { status: res.status, json, text };
+    }
+
+    async function refreshDeal() {
+      if (!dealId) return;
+      const r = await api("GET", "/v1/deals/" + dealId);
+      if (r.status === 200) el("stock").textContent = String(r.json.available_stock ?? r.json.available ?? "?");
+    }
+
+    el("start").onclick = async () => {
+      el("start").disabled = true;
+      line("info", "POST /v1/demo/session …");
+      try {
+        const r = await api("POST", "/v1/demo/session");
+        if (r.status !== 201) {
+          line("err", r.status + " " + (r.json && r.json.message || r.text));
+          el("start").disabled = false;
+          return;
+        }
+        token = r.json.access_token;
+        dealId = r.json.deal_id;
+        reservationId = null;
+        idem = crypto.randomUUID();
+        el("deal").textContent = String(dealId);
+        el("stock").textContent = String(r.json.stock);
+        el("res").textContent = "—";
+        el("order").textContent = "—";
+        el("reserve").disabled = false;
+        el("confirm").disabled = true;
+        el("start").disabled = false;
+        line("ok", "Deal " + dealId + " opened with " + r.json.stock + " units. JWT minted for this browser.");
+      } catch (e) {
+        line("err", String(e));
+        el("start").disabled = false;
+      }
+    };
+
+    el("reserve").onclick = async () => {
+      el("reserve").disabled = true;
+      line("info", "POST /v1/deals/" + dealId + "/reservations …");
+      const r = await api("POST", "/v1/deals/" + dealId + "/reservations", { quantity: 1 }, {
+        "Idempotency-Key": idem,
+      });
+      if (r.status !== 201) {
+        line("err", r.status + " " + (r.json && r.json.code || "") + " " + (r.json && r.json.message || r.text));
+        el("reserve").disabled = false;
+        await refreshDeal();
+        return;
+      }
+      reservationId = r.json.id;
+      el("res").textContent = reservationId.slice(0, 8) + "…";
+      el("confirm").disabled = false;
+      line("ok", "Reserved " + reservationId);
+      await refreshDeal();
+    };
+
+    el("confirm").onclick = async () => {
+      el("confirm").disabled = true;
+      line("info", "POST /v1/reservations/" + reservationId + "/confirm …");
+      const r = await api("POST", "/v1/reservations/" + reservationId + "/confirm");
+      if (r.status !== 200) {
+        line("err", r.status + " " + (r.json && r.json.message || r.text));
+        el("confirm").disabled = false;
+        return;
+      }
+      el("order").textContent = String(r.json.id).slice(0, 8) + "…";
+      line("ok", "Order " + r.json.id + " · " + r.json.total_cents + " " + r.json.currency);
+      await refreshDeal();
+    };
+  </script>
+</body>
+</html>
