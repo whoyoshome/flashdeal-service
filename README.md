@@ -3,8 +3,10 @@
 High-concurrency flash-sale API in Go. It sells a limited stock during a short
 window with **zero overselling** under heavy load.
 
-> **Status:** phase 4 (Redis stock gate). Reservations pass an atomic Lua gate
-> in Redis before reaching PostgreSQL. See the implementation plan in
+> **Status:** phase 7 (performance and resilience) complete. Reservations pass
+> an atomic Lua gate in Redis before reaching PostgreSQL. Abandoned holds
+> expire, the gate is reconciled from PostgreSQL, and the service is measured
+> under load and chaos. See the implementation plan in
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (section 7).
 
 ## Requirements
@@ -41,6 +43,133 @@ starts only the API, PostgreSQL and Redis.
 
 `make test-integration` starts a disposable PostgreSQL with testcontainers, so
 Docker must be running.
+
+## Results
+
+These numbers were measured with k6 against the local Docker Compose stack:
+one Docker Desktop VM with 4 CPUs and 9.7 GiB, shared by k6, the API,
+PostgreSQL, Redis and, from phase 6, the observability stack. The deal has
+one row and the pool has 20 connections. They show how the design behaves,
+not production capacity. Every run sold **exactly** the deal's stock:
+**zero units oversold in every load and chaos run**.
+
+The same k6 scenario ([`test/load/flash_sale.js`](test/load/flash_sale.js))
+was run against three versions of the service:
+
+| Version              | What decides a reservation                                                              |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| PostgreSQL only (phase 3) | A conditional `UPDATE` on the deal's row, for every attempt                        |
+| Redis gate (phase 4) | An atomic Lua script in Redis; only admitted buyers reach PostgreSQL                    |
+| Async commit (phase 7) | The gate, plus reservation transactions that no longer wait for the WAL fsync ([ADR 0006](docs/adr/0006-asynchronous-commit-for-reservations.md)) |
+
+### Scenario B: 1,000 units, about 55,000 buyers
+
+This is the architecture document's case:
+`STOCK=1000 PEAK_RPS=5000 RAMP=2s HOLD=10s make load`. Of the buyers, 98 %
+must be turned away.
+
+```mermaid
+xychart-beta
+    title "Sold-out rejection p99 (ms)"
+    x-axis ["PostgreSQL only", "Redis gate", "Async commit"]
+    y-axis "milliseconds" 0 --> 800
+    bar [794, 6.5, 7.8]
+```
+
+```mermaid
+xychart-beta
+    title "Successful reservation p99 (ms)"
+    x-axis ["PostgreSQL only", "Redis gate", "Async commit"]
+    y-axis "milliseconds" 0 --> 1100
+    bar [1030, 899, 86]
+```
+
+| Metric                           | PostgreSQL only   | Redis gate        | Async commit         |
+| -------------------------------- | ----------------- | ----------------- | -------------------- |
+| Requests served                  | 39 357 (3 169/s)  | 54 422 (4 532/s)  | 55 000 (4 584/s)     |
+| Sold-out rejection p50 / p99     | 523 ms / 794 ms   | 0.40 ms / 6.5 ms  | 0.45 ms / 7.8 ms     |
+| Successful reservation p50 / p99 | 483 ms / 1.03 s   | 434 ms / 899 ms   | **0.96 ms / 86 ms**  |
+| Timeouts                         | 0                 | 0                 | 0                    |
+
+With the gate, a sold-out buyer is answered from Redis in memory and never
+reaches PostgreSQL, so rejections drop from 794 ms to single-digit
+milliseconds. Successful reservations stayed slow until phase 7 found why.
+Each `COMMIT` held the deal's row lock while it waited for its WAL fsync, so
+sales queued behind one another. Committing reservations asynchronously
+took their p50 from 434 ms to under 1 ms.
+
+### Scenario A: 10,000 units at 5,000 attempts per second
+
+This is the `make load` default, where the stock is larger than one row can
+absorb in time.
+
+```mermaid
+xychart-beta
+    title "Units written per second, one deal"
+    x-axis ["PostgreSQL only", "Redis gate", "Async commit"]
+    y-axis "units per second" 0 --> 2200
+    bar [400, 480, 2000]
+```
+
+| Metric                           | PostgreSQL only  | Redis gate         | Async commit        |
+| -------------------------------- | ---------------- | ------------------ | ------------------- |
+| Requests served                  | 13 489 (588/s)   | 34 604 (1 573/s)   | **96 841 (4 402/s)** |
+| Timeouts (503, rolled back)      | 0                | 5 909 (17 %)       | **0**               |
+| Successful reservation p99       | 4.43 s           | 4.64 s             | 986 ms              |
+| Sold-out rejection p99           | 4.16 s           | 22 ms              | 562 ms              |
+
+With the gate but synchronous commits, Redis admitted buyers faster than
+PostgreSQL could write them. Admitted buyers queued until the timeout, and
+each timeout gave its unit back to admit another buyer. At about 2,000
+writes per second that loop is gone, and so are the timeouts.
+
+### Against the design targets
+
+`flash_sale.js` fails a run that misses a target. The targets stay as
+written instead of being relaxed to pass.
+
+| Target (docs/ARCHITECTURE.md)                  | Result                                                     |
+| ---------------------------------------------- | ---------------------------------------------------------- |
+| 0 units oversold under any load                | ✅ every load and chaos run                                |
+| Sold-out rejection p99 < 10 ms                 | ✅ 7.8 ms in scenario B · ❌ 562 ms in A, with the CPUs saturated |
+| Successful reservation p99 < 50 ms             | ❌ 86 ms in B, 986 ms in A: one round trip per sale on one row, on 4 shared CPUs |
+| Redis down: fail closed with `503`             | ✅ 2,500 of 2,500 reservations refused, slowest in 12 ms, none sold |
+| Graceful shutdown without losing requests      | ✅ `SIGTERM` under load: exit code 0, every sale answered  |
+
+The next lever for the reservation p99 is splitting a deal's stock over
+several rows ([ADR 0006](docs/adr/0006-asynchronous-commit-for-reservations.md),
+alternatives). Stateless replicas are part of the design: the stock lives in
+Redis and PostgreSQL, and expiry and reconciliation are safe on any number of
+replicas. Load was measured on a single replica.
+
+### Chaos under load
+
+`make test-chaos` breaks the running stack while about 500 reservations per
+second keep arriving ([details](test/load/results/chaos.md)):
+
+- **Redis stopped for 5 s.** Every reservation sent during the outage got
+  `503 STOCK_UNAVAILABLE` within 12 ms. Sales resumed on their own when
+  Redis returned, and PostgreSQL held exactly the units answered `201`. The
+  first run took 5 s per `503` because of go-redis retries; the client now
+  fails fast ([ADR 0007](docs/adr/0007-fail-fast-redis-client.md)).
+- **API stopped with `SIGTERM`.** It answered every request it had accepted
+  and exited with code 0. PostgreSQL held exactly the units answered `201`.
+
+### On the dashboard
+
+A k6 run on the Grafana dashboard shows a deal's gate stock falling to 0 in
+under a second. The `SOLD_OUT` rate climbs to the offered 5,000 requests per
+second and is 98.1 % of attempts. The PostgreSQL pool is pinned at 20 of 20
+while the units are written
+([details](test/load/results/observability.md)).
+
+### Detailed results
+
+- [Phase 3: PostgreSQL only](test/load/results/baseline-postgres.md)
+- [Phase 4: Redis gate vs PostgreSQL only](test/load/results/redis-gate.md)
+- [Phase 6: a flash sale on the dashboard](test/load/results/observability.md)
+- [Phase 7: the write path, profiled and fixed](test/load/results/write-path.md)
+- [Phase 7: chaos under load](test/load/results/chaos.md)
 
 ## Endpoints
 
