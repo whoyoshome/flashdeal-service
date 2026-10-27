@@ -50,7 +50,7 @@ func (uc *Confirm) Execute(ctx context.Context, in ConfirmInput) (domain.Order, 
 		if err := uc.reservations.UpdateStatus(ctx, res); err != nil {
 			return fmt.Errorf("save confirmation: %w", err)
 		}
-		if err := uc.stock.CommitReserved(ctx, res.DealID(), res.Quantity()); err != nil {
+		if err := uc.stock.CommitReserved(ctx, res); err != nil {
 			return fmt.Errorf("commit stock: %w", err)
 		}
 

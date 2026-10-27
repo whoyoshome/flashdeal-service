@@ -204,7 +204,7 @@ func TestExpire_ConcurrentWorkersNeverShareRows(t *testing.T) {
 	var wg sync.WaitGroup
 	for range workers {
 		uc := usecase.NewExpire(
-			postgres.NewReservationRepo(testPool), postgres.NewDealRepo(testPool), gate,
+			postgres.NewReservationRepo(testPool), postgres.NewDealRepo(testPool, testShards), gate,
 			postgres.NewTxManager(testPool), clock, batch, slog.New(slog.DiscardHandler),
 		)
 		wg.Go(func() {

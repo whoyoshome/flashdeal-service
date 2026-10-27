@@ -15,6 +15,10 @@ import (
 // must take; see Config.ReconcileEvery.
 const reconcileMargin = 5 * time.Second
 
+// maxStockShards bounds STOCK_SHARDS: every read of a deal sums its shards,
+// and the shard index is stored as a SMALLINT.
+const maxStockShards = 256
+
 // ErrInvalid is returned when the configuration parses but breaks a rule
 // the service needs to run safely (for example, a non-positive timeout).
 var ErrInvalid = errors.New("invalid config")
@@ -58,6 +62,10 @@ type Config struct {
 	RateLimitRPS float64 `env:"RATE_LIMIT_RPS" envDefault:"50"`
 	// RateLimitBurst is the token bucket capacity per subject.
 	RateLimitBurst int `env:"RATE_LIMIT_BURST" envDefault:"100"`
+	// StockShards is how many PostgreSQL rows a new deal's stock is split
+	// over, so concurrent reservations do not queue on one row lock. A deal
+	// never gets more shards than units. Existing deals keep theirs.
+	StockShards int `env:"STOCK_SHARDS" envDefault:"8"`
 
 	Postgres Postgres `envPrefix:"POSTGRES_"`
 	Redis    Redis    `envPrefix:"REDIS_"`
@@ -199,6 +207,9 @@ func (c Config) validate() error {
 		// RS256 via JWKS: HMAC secret is unused for verification.
 	case len(c.Auth.Secret) < 32:
 		errs = append(errs, errors.New("JWT_SECRET must be at least 32 bytes when JWT_JWKS_URL is empty"))
+	}
+	if c.StockShards < 1 || c.StockShards > maxStockShards {
+		errs = append(errs, fmt.Errorf("STOCK_SHARDS must be between 1 and %d", maxStockShards))
 	}
 	if c.RateLimitRPS < 0 {
 		errs = append(errs, errors.New("RATE_LIMIT_RPS must be >= 0"))

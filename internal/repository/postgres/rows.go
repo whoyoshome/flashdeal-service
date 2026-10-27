@@ -10,8 +10,16 @@ import (
 // Row structs mirror table columns and never leave this package; they are
 // mapped explicitly to domain entities through the Restore constructors.
 
-const dealColumns = `id, product_id, title, price_cents, currency, total_stock, reserved, sold,
-	per_user_limit, starts_at, ends_at, created_at, updated_at`
+// selectDeals reads deals with their counters summed over the stock shards;
+// callers append a WHERE clause on d. The aggregates run in the same
+// statement, so the counters come from the same snapshot as the deal.
+const selectDeals = `SELECT d.id, d.product_id, d.title, d.price_cents, d.currency, d.total_stock,
+	s.reserved, s.sold, d.per_user_limit, d.starts_at, d.ends_at, d.created_at, d.updated_at
+FROM deals AS d
+CROSS JOIN LATERAL (
+  SELECT COALESCE(sum(reserved), 0)::int AS reserved, COALESCE(sum(sold), 0)::int AS sold
+  FROM deal_stock_shards WHERE deal_id = d.id
+) AS s`
 
 type dealRow struct {
 	ID           int64
@@ -29,7 +37,7 @@ type dealRow struct {
 	UpdatedAt    time.Time
 }
 
-// scanTargets returns pointers in dealColumns order.
+// scanTargets returns pointers in selectDeals column order.
 func (r *dealRow) scanTargets() []any {
 	return []any{
 		&r.ID, &r.ProductID, &r.Title, &r.PriceCents, &r.Currency, &r.TotalStock, &r.Reserved, &r.Sold,

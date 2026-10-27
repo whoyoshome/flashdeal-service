@@ -17,7 +17,7 @@ const (
 // Constraint names from migrations/. Violations are matched by name, not
 // only by SQLSTATE, because one code covers many unrelated constraints.
 const (
-	constraintStockNotExceeded = "deals_stock_not_exceeded"
+	constraintStockNotExceeded = "deal_stock_shards_not_exceeded"
 	constraintReservationDeal  = "reservations_deal_id_fkey"
 )
 

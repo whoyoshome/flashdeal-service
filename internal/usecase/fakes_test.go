@@ -110,6 +110,9 @@ type fakeDeals struct {
 	listArgs   []listCall
 	commits    []stockMove
 	releases   []stockMove
+	// releaseCalls counts ReleaseReserved calls; releases has one entry per
+	// reservation released.
+	releaseCalls int
 }
 
 type listCall struct {
@@ -165,13 +168,16 @@ func (f *fakeDeals) ListActive(_ context.Context, now time.Time, afterID int64, 
 	return out, nil
 }
 
-func (f *fakeDeals) CommitReserved(_ context.Context, dealID int64, qty int) error {
-	f.commits = append(f.commits, stockMove{dealID, qty})
+func (f *fakeDeals) CommitReserved(_ context.Context, r domain.Reservation) error {
+	f.commits = append(f.commits, stockMove{r.DealID(), r.Quantity()})
 	return f.commitErr
 }
 
-func (f *fakeDeals) ReleaseReserved(_ context.Context, dealID int64, qty int) error {
-	f.releases = append(f.releases, stockMove{dealID, qty})
+func (f *fakeDeals) ReleaseReserved(_ context.Context, rs []domain.Reservation) error {
+	f.releaseCalls++
+	for _, r := range rs {
+		f.releases = append(f.releases, stockMove{r.DealID(), r.Quantity()})
+	}
 	return f.releaseErr
 }
 

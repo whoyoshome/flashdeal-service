@@ -48,7 +48,7 @@ func (uc *Cancel) Execute(ctx context.Context, in CancelInput) error {
 		if err := uc.reservations.UpdateStatus(ctx, res); err != nil {
 			return fmt.Errorf("save cancellation: %w", err)
 		}
-		if err := uc.stock.ReleaseReserved(ctx, res.DealID(), res.Quantity()); err != nil {
+		if err := uc.stock.ReleaseReserved(ctx, []domain.Reservation{res}); err != nil {
 			return fmt.Errorf("release stock: %w", err)
 		}
 		return nil

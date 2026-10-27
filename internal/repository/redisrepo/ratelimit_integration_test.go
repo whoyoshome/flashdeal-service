@@ -22,7 +22,9 @@ func uniqueSubject() string {
 func TestRateLimiter(t *testing.T) {
 	t.Parallel()
 
-	lim := redisrepo.NewRateLimiter(testRedis, 10, 3)
+	// One token per 100 s: no refill can land between the calls of a
+	// subtest, however slowly they run under -race.
+	lim := redisrepo.NewRateLimiter(testRedis, 0.01, 3)
 
 	t.Run("admits up to the burst and then rejects", func(t *testing.T) {
 		subject := uniqueSubject()

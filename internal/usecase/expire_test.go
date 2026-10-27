@@ -76,7 +76,7 @@ func TestExpire(t *testing.T) {
 		require.Equal(t, []gateCall{{dealID: 7, userID: "user-1", qty: 2}}, deps.gate.releases)
 	})
 
-	t.Run("releases each deal's units once per batch, in deal ID order", func(t *testing.T) {
+	t.Run("releases every reservation of a batch in one call", func(t *testing.T) {
 		t.Parallel()
 		deps := newExpireDeps(
 			pendingReservation(t, 1, 9, 1, time.Minute),
@@ -89,7 +89,8 @@ func TestExpire(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, 3, n)
-		require.Equal(t, []stockMove{{dealID: 7, qty: 2}, {dealID: 9, qty: 4}}, deps.deals.releases)
+		require.Equal(t, 1, deps.deals.releaseCalls, "one call per batch lets the store order its locks")
+		require.ElementsMatch(t, []stockMove{{dealID: 9, qty: 1}, {dealID: 7, qty: 2}, {dealID: 9, qty: 3}}, deps.deals.releases)
 		require.Len(t, deps.gate.releases, 3, "the gate tracks units per buyer, so it is released per reservation")
 	})
 

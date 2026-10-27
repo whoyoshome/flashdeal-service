@@ -21,7 +21,7 @@ var errBoom = errors.New("boom")
 func TestTxManager(t *testing.T) {
 	t.Parallel()
 	txm := postgres.NewTxManager(testPool)
-	deals := postgres.NewDealRepo(testPool)
+	deals := postgres.NewDealRepo(testPool, testShards)
 
 	t.Run("commits every statement when fn succeeds", func(t *testing.T) {
 		t.Parallel()
@@ -79,13 +79,14 @@ func TestTxManager(t *testing.T) {
 		d := createDeal(t, dealOpts{stock: 10})
 		reservations := postgres.NewReservationRepo(testPool)
 
+		res := newReservation(t, d.ID(), uniqueUser(), "k", 1)
 		err := txm.WithinTx(t.Context(), func(ctx context.Context) error {
 			inner := txm.WithinTx(ctx, func(ctx context.Context) error {
-				_, _, err := reservations.Create(ctx, newReservation(t, d.ID(), uniqueUser(), "k", 1))
+				_, _, err := reservations.Create(ctx, res)
 				return err
 			})
 			require.NoError(t, inner)
-			return deals.CommitReserved(ctx, d.ID(), 1)
+			return deals.CommitReserved(ctx, res)
 		})
 
 		require.NoError(t, err)
@@ -97,7 +98,7 @@ func TestTxManager(t *testing.T) {
 
 func TestDealRepo(t *testing.T) {
 	t.Parallel()
-	repo := postgres.NewDealRepo(testPool)
+	repo := postgres.NewDealRepo(testPool, testShards)
 
 	t.Run("creates a deal and reads it back unchanged", func(t *testing.T) {
 		t.Parallel()
@@ -144,36 +145,94 @@ func TestDealRepo(t *testing.T) {
 		require.Equal(t, active2.ID(), page2[0].ID())
 	})
 
-	t.Run("commits reserved units into sold", func(t *testing.T) {
+	t.Run("splits the stock evenly over the configured shards", func(t *testing.T) {
 		t.Parallel()
-		d := createDeal(t, dealOpts{stock: 10})
-		_, _, err := postgres.NewReservationRepo(testPool).Create(t.Context(), newReservation(t, d.ID(), uniqueUser(), "k", 3))
+		d := createDeal(t, dealOpts{stock: 10, shards: 4, limit: 1})
+
+		require.Equal(t, []shardState{{Capacity: 3}, {Capacity: 3}, {Capacity: 2}, {Capacity: 2}}, loadShards(t, d.ID()))
+	})
+
+	t.Run("never creates more shards than units", func(t *testing.T) {
+		t.Parallel()
+		d := createDeal(t, dealOpts{stock: 3, shards: 8, limit: 1})
+
+		require.Equal(t, []shardState{{Capacity: 1}, {Capacity: 1}, {Capacity: 1}}, loadShards(t, d.ID()))
+	})
+
+	t.Run("never makes a shard smaller than the per-user limit", func(t *testing.T) {
+		t.Parallel()
+		d := createDeal(t, dealOpts{stock: 10, shards: 8, limit: 3})
+
+		require.Equal(t, []shardState{{Capacity: 4}, {Capacity: 3}, {Capacity: 3}}, loadShards(t, d.ID()))
+	})
+
+	t.Run("keeps one shard when the per-user limit exceeds the stock", func(t *testing.T) {
+		t.Parallel()
+		d := createDeal(t, dealOpts{stock: 3, shards: 8, limit: 5})
+
+		require.Equal(t, []shardState{{Capacity: 3}}, loadShards(t, d.ID()))
+	})
+
+	t.Run("commits reserved units into sold on the reservation's shard", func(t *testing.T) {
+		t.Parallel()
+		d := createDeal(t, dealOpts{stock: 10, shards: 2})
+		reservations := postgres.NewReservationRepo(testPool)
+		_, _, err := reservations.Create(t.Context(), newReservation(t, d.ID(), uniqueUser(), uniqueID(), 4))
 		require.NoError(t, err)
+		res := newReservation(t, d.ID(), uniqueUser(), "k", 3)
+		_, _, err = reservations.Create(t.Context(), res)
+		require.NoError(t, err)
+		require.Equal(t, 1, reservationShard(t, res.ID()), "shard 0 has 1 unit left, so 3 units go to shard 1")
 
-		require.NoError(t, repo.CommitReserved(t.Context(), d.ID(), 3))
+		require.NoError(t, repo.CommitReserved(t.Context(), res))
 
+		require.Equal(t, []shardState{{Capacity: 5, Reserved: 4}, {Capacity: 5, Sold: 3}}, loadShards(t, d.ID()))
 		got := reloadDeal(t, d.ID())
-		require.Zero(t, got.Reserved())
+		require.Equal(t, 4, got.Reserved())
 		require.Equal(t, 3, got.Sold())
 	})
 
-	t.Run("releases reserved units back to the deal", func(t *testing.T) {
+	t.Run("releases every reservation's units back to its shard", func(t *testing.T) {
 		t.Parallel()
-		d := createDeal(t, dealOpts{stock: 10})
-		_, _, err := postgres.NewReservationRepo(testPool).Create(t.Context(), newReservation(t, d.ID(), uniqueUser(), "k", 3))
-		require.NoError(t, err)
+		d := createDeal(t, dealOpts{stock: 10, shards: 2})
+		other := createDeal(t, dealOpts{stock: 4, shards: 2, limit: 2})
+		reservations := postgres.NewReservationRepo(testPool)
+		var rs []domain.Reservation
+		for _, spec := range []struct {
+			dealID int64
+			qty    int
+		}{{d.ID(), 4}, {d.ID(), 3}, {d.ID(), 1}, {other.ID(), 2}} {
+			r := newReservation(t, spec.dealID, uniqueUser(), uniqueID(), spec.qty)
+			_, _, err := reservations.Create(t.Context(), r)
+			require.NoError(t, err)
+			rs = append(rs, r)
+		}
 
-		require.NoError(t, repo.ReleaseReserved(t.Context(), d.ID(), 2))
+		require.NoError(t, repo.ReleaseReserved(t.Context(), rs))
 
-		require.Equal(t, 1, reloadDeal(t, d.ID()).Reserved())
+		require.Equal(t, []shardState{{Capacity: 5}, {Capacity: 5}}, loadShards(t, d.ID()))
+		require.Equal(t, []shardState{{Capacity: 2}, {Capacity: 2}}, loadShards(t, other.ID()))
 	})
 
-	t.Run("reports corrupt state when moving more units than are reserved", func(t *testing.T) {
+	t.Run("reports corrupt state when a reservation's units were already moved", func(t *testing.T) {
 		t.Parallel()
 		d := createDeal(t, dealOpts{stock: 10})
+		res := newReservation(t, d.ID(), uniqueUser(), "k", 2)
+		_, _, err := postgres.NewReservationRepo(testPool).Create(t.Context(), res)
+		require.NoError(t, err)
+		require.NoError(t, repo.CommitReserved(t.Context(), res))
 
-		require.ErrorIs(t, repo.CommitReserved(t.Context(), d.ID(), 1), domain.ErrCorruptState)
-		require.ErrorIs(t, repo.ReleaseReserved(t.Context(), d.ID(), 1), domain.ErrCorruptState)
+		require.ErrorIs(t, repo.CommitReserved(t.Context(), res), domain.ErrCorruptState)
+		require.ErrorIs(t, repo.ReleaseReserved(t.Context(), []domain.Reservation{res}), domain.ErrCorruptState)
+	})
+
+	t.Run("reports corrupt state for a reservation that was never stored", func(t *testing.T) {
+		t.Parallel()
+		d := createDeal(t, dealOpts{stock: 10})
+		ghost := newReservation(t, d.ID(), uniqueUser(), "k", 1)
+
+		require.ErrorIs(t, repo.CommitReserved(t.Context(), ghost), domain.ErrCorruptState)
+		require.ErrorIs(t, repo.ReleaseReserved(t.Context(), []domain.Reservation{ghost}), domain.ErrCorruptState)
 	})
 }
 
@@ -213,6 +272,30 @@ func TestReservationRepoCreate(t *testing.T) {
 		_, _, err := repo.Create(t.Context(), newReservation(t, 999_999_999, uniqueUser(), "k", 1))
 
 		require.ErrorIs(t, err, domain.ErrDealNotFound)
+	})
+
+	t.Run("returns ErrSoldOut when the units left are split over shards too small for the request", func(t *testing.T) {
+		t.Parallel()
+		d := createDeal(t, dealOpts{stock: 4, shards: 2, limit: 2})
+		deals := postgres.NewDealRepo(testPool, testShards)
+		var taken []domain.Reservation
+		for range 3 {
+			r := newReservation(t, d.ID(), uniqueUser(), uniqueID(), 1)
+			_, _, err := repo.Create(t.Context(), r)
+			require.NoError(t, err)
+			taken = append(taken, r)
+		}
+		require.NoError(t, deals.ReleaseReserved(t.Context(), taken[:1]))
+		require.Equal(t, 2, reloadDeal(t, d.ID()).Available(), "one unit left on each shard")
+
+		_, _, err := repo.Create(t.Context(), newReservation(t, d.ID(), uniqueUser(), "k", 2))
+		require.ErrorIs(t, err, domain.ErrSoldOut, "no single shard holds 2 units (ADR 0011)")
+
+		for range 2 {
+			_, _, err := repo.Create(t.Context(), newReservation(t, d.ID(), uniqueUser(), uniqueID(), 1))
+			require.NoError(t, err, "single units still sell from either shard")
+		}
+		require.Zero(t, reloadDeal(t, d.ID()).Available())
 	})
 
 	t.Run("returns the stored reservation on an idempotent retry without reserving again", func(t *testing.T) {
@@ -355,7 +438,7 @@ func TestOrderRepo(t *testing.T) {
 
 // TestReservationRepoNoOversell is the PostgreSQL half of the zero-oversell
 // guarantee: even without the Redis gate, concurrent reservations can never
-// reserve more than total_stock.
+// reserve more than total_stock, and they fill every stock shard exactly.
 func TestReservationRepoNoOversell(t *testing.T) {
 	t.Parallel()
 	const stock, buyers = 20, 200
@@ -389,6 +472,46 @@ func TestReservationRepoNoOversell(t *testing.T) {
 	got := reloadDeal(t, d.ID())
 	require.Equal(t, stock, got.Reserved())
 	require.Zero(t, got.Available())
+	for i, s := range loadShards(t, d.ID()) {
+		require.Equal(t, s.Capacity, s.Reserved, "shard %d", i)
+	}
+}
+
+// TestReservationRepoSpreadsOverShards checks that reservations in flight
+// at the same time take different shards instead of waiting on one: while
+// one transaction holds shard 0, another reservation completes on shard 1.
+func TestReservationRepoSpreadsOverShards(t *testing.T) {
+	t.Parallel()
+	repo := postgres.NewReservationRepo(testPool)
+	txm := postgres.NewTxManager(testPool)
+	d := createDeal(t, dealOpts{stock: 10, shards: 2, limit: 1})
+
+	held := make(chan struct{})
+	done := make(chan struct{})
+	first := newReservation(t, d.ID(), uniqueUser(), "k", 1)
+	errc := make(chan error, 1)
+	go func() {
+		errc <- txm.WithinTx(t.Context(), func(ctx context.Context) error {
+			if _, _, err := repo.Create(ctx, first); err != nil {
+				return err
+			}
+			close(held)
+			<-done
+			return nil
+		})
+	}()
+	<-held
+
+	second := newReservation(t, d.ID(), uniqueUser(), "k", 1)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	_, _, err := repo.Create(ctx, second)
+	close(done)
+
+	require.NoError(t, err, "the second reservation must not wait for the first one's shard")
+	require.NoError(t, <-errc)
+	require.Equal(t, 0, reservationShard(t, first.ID()))
+	require.Equal(t, 1, reservationShard(t, second.ID()))
 }
 
 // TestReservationRepoConcurrentRetries checks that a burst of retries with

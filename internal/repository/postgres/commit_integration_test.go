@@ -31,6 +31,18 @@ func (r *sqlRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx
 
 func (r *sqlRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
+func (r *sqlRecorder) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
+	return ctx
+}
+
+func (r *sqlRecorder) TraceBatchQuery(_ context.Context, _ *pgx.Conn, data pgx.TraceBatchQueryData) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sqls = append(r.sqls, strings.Join(strings.Fields(data.SQL), " "))
+}
+
+func (r *sqlRecorder) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {}
+
 func (r *sqlRecorder) statements() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -38,7 +50,7 @@ func (r *sqlRecorder) statements() []string {
 }
 
 // TestReservationRepoAsyncCommit pins ADR 0006: the reservation transaction
-// commits asynchronously, the setting is in force before the deal row is
+// commits asynchronously, the setting is in force before a stock shard is
 // locked, and it never outlives that transaction.
 func TestReservationRepoAsyncCommit(t *testing.T) {
 	t.Parallel()
@@ -60,12 +72,14 @@ func TestReservationRepoAsyncCommit(t *testing.T) {
 	for _, s := range rec.statements() {
 		switch {
 		case strings.HasPrefix(s, "begin"), strings.HasPrefix(s, "commit"),
-			strings.HasPrefix(s, "SET LOCAL"), strings.HasPrefix(s, "INSERT"), strings.HasPrefix(s, "UPDATE"):
+			strings.HasPrefix(s, "SET LOCAL"), strings.HasPrefix(s, "INSERT"), strings.HasPrefix(s, "UPDATE"),
+			strings.HasPrefix(s, "WITH"), strings.HasPrefix(s, "SAVEPOINT"):
 			stmts = append(stmts, strings.Fields(s)[0])
 		}
 	}
-	require.Equal(t, []string{"begin", "SET", "INSERT", "UPDATE", "commit"}, stmts,
-		"async commit is set inside the transaction, before the deal row is locked")
+	// WITH is the statement that locks a stock shard and takes the units.
+	require.Equal(t, []string{"begin", "SET", "INSERT", "SAVEPOINT", "WITH", "commit"}, stmts,
+		"async commit is set inside the transaction, before any stock shard is locked")
 
 	var setting string
 	require.NoError(t, pool.QueryRow(t.Context(), "SHOW synchronous_commit").Scan(&setting))
