@@ -30,6 +30,9 @@ import (
 // can run in parallel against one container.
 var testPool *pgxpool.Pool
 
+// testURL lets a test open its own pool, for example with a query tracer.
+var testURL string
+
 func TestMain(m *testing.M) {
 	code, err := runIntegration(m)
 	if err != nil {
@@ -57,6 +60,7 @@ func runIntegration(m *testing.M) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("connection string: %w", err)
 	}
+	testURL = url
 	if err := migrateUp(url); err != nil {
 		return 0, err
 	}

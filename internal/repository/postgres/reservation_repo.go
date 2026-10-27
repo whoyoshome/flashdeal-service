@@ -19,6 +19,16 @@ var (
 )
 
 const (
+	// A reservation is a short hold, not a sale: the transaction that creates it
+	// commits without waiting for its WAL to reach disk. The deal row stays
+	// locked from the stock UPDATE until COMMIT, so waiting for the flush
+	// serialized every sale of a deal behind one fsync (about 425 per second).
+	// If PostgreSQL itself crashes, holds committed in the last few hundred
+	// milliseconds can be lost: the reservation and its reserved units vanish
+	// together, so nothing is oversold, and the reconciler re-aligns the gate.
+	// Confirmations and orders keep synchronous commits. See ADR 0006.
+	asyncCommit = `SET LOCAL synchronous_commit = off`
+
 	// ON CONFLICT keeps the transaction usable on a retried idempotency key,
 	// so the stored reservation can be read back in the same transaction.
 	insertReservation = `INSERT INTO reservations (id, deal_id, user_id, quantity, status, idempotency_key, expires_at, created_at, updated_at)
@@ -71,7 +81,8 @@ func NewReservationRepo(pool *pgxpool.Pool) *ReservationRepo {
 }
 
 // Create inserts res and reserves its units on the deal in one transaction,
-// joining the caller's transaction when there is one. A retry with the same
+// joining the caller's transaction when there is one. That transaction
+// commits asynchronously (see asyncCommit). A retry with the same
 // idempotency key and the same request returns the stored reservation with
 // created false and reserves nothing; the same key for a different request
 // returns domain.ErrIdempotencyKeyReused.
@@ -82,6 +93,11 @@ func (r *ReservationRepo) Create(ctx context.Context, res domain.Reservation) (d
 	)
 	err := withinTx(ctx, r.pool, func(ctx context.Context) error {
 		q := db(ctx, r.pool)
+		// Issued first, before the deal row is locked, so the extra round trip
+		// does not lengthen the lock.
+		if _, err := q.Exec(ctx, asyncCommit); err != nil {
+			return fmt.Errorf("set async commit: %w", err)
+		}
 		tag, err := q.Exec(ctx, insertReservation,
 			res.ID(), res.DealID(), res.UserID(), res.Quantity(), string(res.Status()),
 			res.IdempotencyKey(), res.ExpiresAt(), res.CreatedAt(), res.UpdatedAt(),
