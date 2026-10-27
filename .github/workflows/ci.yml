@@ -85,7 +85,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       # Release tags v1.2.3 publish 1.2.3; main publishes main and sha-<short>.
       - id: meta
         uses: docker/metadata-action@v5
