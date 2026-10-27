@@ -30,9 +30,9 @@ http.setResponseCallback(http.expectedStatuses(201, 409));
 const reserved = new Counter('reservations_created');
 const soldOut = new Counter('reservations_sold_out');
 // Overload makes requests exceed their time budget (503 REQUEST_TIMEOUT).
-// That is degraded availability, not a correctness violation: it is
-// reported here and becomes a threshold in phase 7.
+// That is degraded availability, not a correctness violation.
 const timedOut = new Rate('reservations_timed_out');
+const serverErrors = new Rate('server_errors');
 const unexpected = new Rate('unexpected_responses');
 const reservedLatency = new Trend('reserve_ok_duration', true);
 const soldOutLatency = new Trend('reserve_sold_out_duration', true);
@@ -52,11 +52,15 @@ export const options = {
     },
   },
   thresholds: {
-    // Correctness gates the run: never more reservations than stock, and no
-    // answer other than 201, 409 SOLD_OUT or 503 REQUEST_TIMEOUT. Latency and
-    // timeouts are recorded; phase 7 turns them into thresholds.
+    // Correctness: never more reservations than stock, and no answer other
+    // than 201, 409 SOLD_OUT or 503 REQUEST_TIMEOUT.
     reservations_created: [`count<=${STOCK}`],
     unexpected_responses: ['rate==0'],
+    // The non-functional targets in docs/ARCHITECTURE.md. A run that misses
+    // them fails, so a regression cannot pass silently.
+    reserve_ok_duration: ['p(99)<50'],
+    reserve_sold_out_duration: ['p(99)<10'],
+    server_errors: ['rate<0.01'],
   },
   summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'],
 };
@@ -114,6 +118,7 @@ export default function (data) {
   const isTimeout = res.status === 503 && res.json('code') === 'REQUEST_TIMEOUT';
   unexpected.add(!ok && !isSoldOut && !isTimeout);
   timedOut.add(isTimeout);
+  serverErrors.add(res.status >= 500);
   if (ok) {
     reserved.add(1);
     reservedLatency.add(res.timings.duration);
