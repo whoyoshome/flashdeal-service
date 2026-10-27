@@ -58,7 +58,7 @@ DEAL="$(curl -sf -X POST http://127.0.0.1:18080/v1/deals \
   -H "Authorization: Bearer $ADMIN" -H 'Idempotency-Key: k8s-smoke-deal' \
   -H 'Content-Type: application/json' \
   -d '{"product_id":"sku-smoke","title":"Smoke","price_cents":999,"currency":"USD","total_stock":2,"per_user_limit":1,"starts_at":"2026-01-01T00:00:00Z","ends_at":"2030-01-01T00:00:00Z"}")"
-DEAL_ID="$(printf '%s' "$DEAL" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')"
+DEAL_ID="$(printf '%s' "$DEAL" | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 curl -sf -X POST "http://127.0.0.1:18080/v1/deals/${DEAL_ID}/activate" \
   -H "Authorization: Bearer $ADMIN" >/dev/null
 RES_CODE="$(curl -s -o /tmp/flashdeal-reserve.json -w '%{http_code}' -X POST \
