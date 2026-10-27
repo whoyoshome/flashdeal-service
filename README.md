@@ -99,8 +99,12 @@ for another sale, and `make down` to stop everything.
 | pprof      | <http://localhost:6060/debug/pprof/> |
 
 Postgres, Redis, the API, pprof, Grafana, Prometheus and Jaeger bind to
-`127.0.0.1` on the host. To try the API by hand (Bearer JWTs; mint with
-`make token`):
+`127.0.0.1` on the host. If a local PostgreSQL or Redis already uses 5432 or
+6379, set `POSTGRES_HOST_PORT` or `REDIS_HOST_PORT` in a `.env` file (see
+[`.env.example`](.env.example)); nothing else changes, since the services
+talk to each other inside the Compose network.
+
+To try the API by hand (Bearer JWTs; mint with `make token`):
 
 ```bash
 make up && make migrate
