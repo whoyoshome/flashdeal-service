@@ -65,16 +65,33 @@ transactions per second on one VM shared with the load generator. Each
 one holds a pool connection for five round trips: `BEGIN`, `SET LOCAL`,
 `INSERT`, the shard update batch and `COMMIT`.
 
+## One statement per reservation
+
+ADR 0013 folds the common case into a single statement: it takes the units
+from a free shard and inserts the reservation, committing asynchronously as
+its own transaction. The five-round-trip transaction remains as the
+fallback. Three runs with 32 shards, after a warm-up:
+
+| Reservation path | `reserve_ok` p50 / p99 | Dropped iterations |
+| --- | --- | --- |
+| Five round trips | 40.2 / 181.3 ms, then 13.4 / 111.1 ms | 570–934 |
+| One statement | 1.4 / 59.5 ms, 5.8 / 114.9 ms, 1.4 / 43.7 ms | 7, 188, 0 |
+
+- PostgreSQL was busy in only 6–9 of the 200 samples, against 14–35
+  before: the burst drains faster.
+- WAL syncs rose to 91–124 per run, still under 0.5 s in total.
+- Scenario B's reservation p99 was 8.2, 5.6 and 6.4 ms.
+- The API now uses about 1 CPU and k6 about 0.8 during the burst.
+
 ## Next levers
 
 1. **More shards by default.** Done: `STOCK_SHARDS` now defaults to 32. It
    removes most of the lock waiting at no cost to scenario B, and a shard
    is still never smaller than `per_user_limit` (ADR 0011).
-2. **Fewer round trips per reservation.** Folding the steps into fewer
-   statements would shorten how long each reservation holds its pool
-   connection.
+2. **Fewer round trips per reservation.** Done: one statement in the
+   common case (ADR 0013).
 3. **Dedicated hardware**, where PostgreSQL and the load generator do not
-   share 4 CPUs.
+   share 4 CPUs. One run in three still crossed 50 ms on this VM.
 
 ## How to reproduce
 

@@ -222,7 +222,7 @@ written instead of being relaxed to pass.
 | ---------------------------------------------- | ---------------------------------------------------------- |
 | 0 units oversold under any load                | ✅ every load and chaos run                                |
 | Sold-out rejection p99 < 10 ms                 | ✅ 7.8 ms in scenario B · ❌ 562 ms in A, with the CPUs saturated |
-| Successful reservation p99 < 50 ms             | ✅ 7–11 ms in B with 8 stock shards, 15–17 ms with 2 replicas · ⚠️ 44–51 ms on the first burst after a restart · ❌ 111–181 ms in A with 32 shards (519–659 ms with 8): 10,000 sales in about 3 s on 4 shared CPUs |
+| Successful reservation p99 < 50 ms             | ✅ 5.6–8.2 ms in B, 15–17 ms with 2 replicas · ⚠️ 44–51 ms on the first burst after a restart · ⚠️ 43.7–114.9 ms in A with one statement per sale (111–181 ms with five round trips): 10,000 sales in about 3 s on 4 shared CPUs |
 | Redis down: fail closed with `503`             | ✅ 2,500 of 2,500 reservations refused, slowest in 12 ms, none sold |
 | Graceful shutdown without losing requests      | ✅ `SIGTERM` under load: exit code 0, every sale answered  |
 
@@ -291,6 +291,7 @@ obvious has an architecture decision record:
 | [0010](docs/adr/0010-oidc-jwks-verification.md) | Optional RS256 verification against an OIDC JWKS URL |
 | [0011](docs/adr/0011-stock-shards.md) | Split each deal's stock over shard rows taken with `SKIP LOCKED` |
 | [0012](docs/adr/0012-transactional-outbox.md) | Publish `order.confirmed` to a Redis Stream through a transactional outbox |
+| [0013](docs/adr/0013-single-statement-reservation.md) | Reserve in a single statement when a stock shard is free |
 
 ## Technical overview
 
@@ -453,12 +454,11 @@ without publishing it.
 
 Limitations, all documented where they are decided:
 
-- **Reservation latency target met only for scenario B.** With 8 stock
-  shards and a warm API, scenario B's p99 is 7–11 ms (15–17 ms on 2
-  replicas). The first burst after a restart measured 44–51 ms. Scenario A
-  (10,000 units at 5,000 rps) misses the target: 111–181 ms with 32 shards,
-  the default now, against 258–659 ms with 8. Its 10,000 sales land in
-  about 3 seconds on 4 CPUs shared with k6
+- **Reservation latency target not always met in scenario A.** Scenario B
+  is at 5.6–8.2 ms p99 with a warm API (15–17 ms on 2 replicas, measured
+  before ADR 0013), and the first burst after a restart measured 44–51 ms.
+  Scenario A (10,000 units at 5,000 rps) measured 43.7, 59.5 and 114.9 ms:
+  its 10,000 sales land in about 3 seconds on 4 CPUs shared with k6
   ([pg-profile.md](test/load/results/pg-profile.md)).
 - **Shard fragmentation.** Near the end of a sale, a multi-unit request can
   get `SOLD_OUT` while single units remain on different shards
@@ -491,10 +491,7 @@ Limitations, all documented where they are decided:
 
 Next steps:
 
-1. **Fewer round trips per reservation.** Each reservation holds a pool
-   connection for five round trips, and scenario A's burst queues on them
-   ([pg-profile.md](test/load/results/pg-profile.md)).
-2. **Scenario A on dedicated hardware.** The in-cluster k6 Job
+1. **Scenario A on dedicated hardware.** The in-cluster k6 Job
    (`make load-k8s-job`) and the PostgreSQL profiler
    (`test/load/pg_profile.sh`) are ready for nodes that are not shared
    with the load generator.

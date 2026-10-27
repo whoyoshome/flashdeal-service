@@ -251,6 +251,8 @@ func TestReservationRepoCreate(t *testing.T) {
 		require.True(t, created)
 		require.Equal(t, res.ID(), stored.ID())
 		require.Equal(t, 2, reloadDeal(t, d.ID()).Reserved())
+		shards := loadShards(t, d.ID())
+		require.Equal(t, 2, shards[reservationShard(t, res.ID())].Reserved, "the reservation records the shard it took")
 	})
 
 	t.Run("returns ErrSoldOut and stores nothing when stock is short", func(t *testing.T) {
