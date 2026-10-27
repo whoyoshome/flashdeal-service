@@ -8,6 +8,20 @@ arrive too late in about half a millisecond (p50), and PostgreSQL stays the
 source of truth for the rest. The service is measured under load and chaos, with the
 numbers below.
 
+## Demo
+
+- **App:** https://flashdeal-service.onrender.com/
+- **API:** https://flashdeal-service.onrender.com/healthz
+
+The first request can take 30–60 seconds if the free host has spun down;
+retry if a click fails once.
+
+No account needed. On the app page:
+
+1. **Start demo sale** — opens a private 5-unit deal and mints a short-lived JWT for this browser.
+2. **Reserve 1 unit** — real `POST /v1/deals/{id}/reservations` with `Idempotency-Key`.
+3. **Confirm order** — real `POST /v1/reservations/{id}/confirm` (payment stub always approves).
+
 ## The problem
 
 A flash sale puts 1,000 units in front of 50,000 buyers who all arrive in
@@ -80,20 +94,6 @@ api/openapi.yaml        HTTP contract
 deploy/                 Prometheus, Grafana, and Kubernetes manifests (hardened pods, migration Job, HPA, PDB)
 test/                   e2e, chaos and k6 load tests with their results
 ```
-
-## Demo
-
-- **App:** https://flashdeal-service.onrender.com/
-- **API:** https://flashdeal-service.onrender.com/healthz
-
-The first request can take 30–60 seconds if the free host has spun down;
-retry if a click fails once.
-
-No account needed. On the app page:
-
-1. **Start demo sale** — opens a private 5-unit deal and mints a short-lived JWT for this browser.
-2. **Reserve 1 unit** — real `POST /v1/deals/{id}/reservations` with `Idempotency-Key`.
-3. **Confirm order** — real `POST /v1/reservations/{id}/confirm` (payment stub always approves).
 
 ## Quick start
 
