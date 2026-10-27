@@ -174,6 +174,12 @@ Each `COMMIT` held the deal's row lock while it waited for its WAL fsync, so
 sales queued behind one another. Committing reservations asynchronously
 took their p50 from 434 ms to under 1 ms.
 
+Both scenarios were measured again after every reservation started carrying
+a JWT that the API verifies. The results did not change beyond run-to-run
+noise: in scenario B, 0.45 ms / 7.4 ms for rejections and 0.94 ms / 91 ms
+for successful reservations
+([details](test/load/results/jwt-auth.md)).
+
 ### Scenario A: 10,000 units at 5,000 attempts per second
 
 This is the `make load` default, where the stock is larger than one row can
@@ -246,6 +252,7 @@ while the units are written
 - [Phase 6: a flash sale on the dashboard](test/load/results/observability.md)
 - [Phase 7: the write path, profiled and fixed](test/load/results/write-path.md)
 - [Phase 7: chaos under load](test/load/results/chaos.md)
+- [JWT authentication: both scenarios measured again](test/load/results/jwt-auth.md)
 
 ## Design decisions
 
