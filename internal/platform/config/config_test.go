@@ -130,6 +130,40 @@ func TestLoad(t *testing.T) {
 	})
 }
 
+func TestLoadMigrate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("needs only POSTGRES_URL, not the API's secrets", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := config.LoadMigrate([]string{"POSTGRES_URL=" + testPostgresURL})
+
+		require.NoError(t, err)
+		require.Equal(t, testPostgresURL, cfg.Postgres.URL)
+		require.Equal(t, slog.LevelInfo, cfg.LogLevel)
+		require.Equal(t, 5*time.Second, cfg.Postgres.ConnectTimeout)
+		require.Equal(t, 5*time.Second, cfg.Postgres.StatementTimeout)
+	})
+
+	t.Run("returns VarIsNotSetError when POSTGRES_URL is missing", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := config.LoadMigrate(nil)
+
+		var notSet env.VarIsNotSetError
+		require.ErrorAs(t, err, &notSet)
+		require.Equal(t, "POSTGRES_URL", notSet.Key)
+	})
+
+	t.Run("rejects a non-positive statement timeout", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := config.LoadMigrate([]string{"POSTGRES_URL=" + testPostgresURL, "POSTGRES_STATEMENT_TIMEOUT=0s"})
+
+		require.ErrorIs(t, err, config.ErrInvalid)
+	})
+}
+
 func TestLoadValidation(t *testing.T) {
 	t.Parallel()
 

@@ -72,7 +72,7 @@ internal/worker/        expirer, reconciler and stock sampler
 internal/platform/      config, logging, clock, IDs, metrics and tracing
 migrations/             SQL schema
 api/openapi.yaml        HTTP contract
-deploy/                 Prometheus, Grafana, and Kubernetes manifests (probes, HPA)
+deploy/                 Prometheus, Grafana, and Kubernetes manifests (hardened pods, migration Job, HPA, PDB)
 test/                   e2e, chaos and k6 load tests with their results
 ```
 
@@ -281,7 +281,7 @@ obvious has an architecture decision record:
 | Distributed correctness | Redis Lua gate + PostgreSQL `CHECK`, compensation, reconciler |
 | Observability | `slog` JSON, Prometheus business metrics, OpenTelemetry → Jaeger, pprof |
 | CI/CD | GitHub Actions: lint, `govulncheck`, unit, integration, e2e, image; Dependabot |
-| Containers & Kubernetes | Multi-stage distroless image; manifests under [`deploy/k8s/`](deploy/k8s/) (Deployment, probes, HPA) |
+| Containers & Kubernetes | Multi-stage distroless image; [`deploy/k8s/`](deploy/k8s/): `restricted` Pod Security, read-only non-root pods, migration Job, probes, HPA, PDB, validated with kubeconform |
 
 ## API
 
@@ -410,6 +410,7 @@ go tool pprof "http://localhost:6060/debug/pprof/profile?seconds=10"
 | `make load` | The k6 flash-sale scenario; fails when a design target is missed |
 | `make lint` | `golangci-lint`, including the layer rules, plus `govulncheck` |
 | `make lint-api` | Validates `api/openapi.yaml` with Redocly |
+| `make lint-k8s` | Validates `deploy/k8s/` against the Kubernetes schemas with kubeconform |
 
 CI runs lint, unit, integration and end-to-end tests on every pull request.
 When they pass on `main` or on a `v*` tag, it publishes the image to

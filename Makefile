@@ -12,6 +12,7 @@ export MSYS_NO_PATHCONV := 1
 .DEFAULT_GOAL := check
 
 REDOCLY_IMAGE ?= redocly/cli:2.71.1
+KUBECONFORM_IMAGE ?= ghcr.io/yannh/kubeconform:v0.7.0
 K6_IMAGE      ?= grafana/k6:2.3.0
 # k6 joins the Compose network and calls the api service directly.
 K6_NETWORK    ?= flashdeal_default
@@ -26,7 +27,7 @@ JWT_ISSUER ?= flashdeal
 TOKEN_SUB  ?= alice
 TOKEN_ROLE ?= user
 
-.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api load build tidy token
+.PHONY: check up down migrate demo test test-integration test-e2e test-chaos lint lint-api lint-k8s load build tidy token
 
 ## check: lint and unit tests (required before declaring a task done)
 check: lint test
@@ -83,6 +84,10 @@ lint:
 ## lint-api: validate api/openapi.yaml with Redocly (runs in Docker)
 lint-api:
 	docker run --rm -v "$(CURDIR):/spec" -w /spec $(REDOCLY_IMAGE) lint api/openapi.yaml
+
+## lint-k8s: validate deploy/k8s against the Kubernetes schemas with kubeconform (runs in Docker)
+lint-k8s:
+	docker run --rm -v "$(CURDIR)/deploy/k8s:/k8s:ro" $(KUBECONFORM_IMAGE) -strict -summary /k8s
 
 ## load: k6 flash-sale scenario against the running stack (make up + make migrate first)
 load:

@@ -1,0 +1,55 @@
+# Applies the schema migrations embedded in the release image. Run it before
+# rolling out a release; the name carries the version because a Job's pod
+# template is immutable.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flashdeal-migrate-0-8-0
+  namespace: flashdeal
+  labels:
+    app.kubernetes.io/name: flashdeal
+    app.kubernetes.io/component: migrate
+    app.kubernetes.io/version: "0.8.0"
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flashdeal
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: flashdeal-api
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/whoyoshome/flashdeal-service:0.8.0
+          imagePullPolicy: IfNotPresent
+          args: ["migrate"]
+          # Only the database URL: the migration never sees the JWT secret.
+          env:
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: flashdeal-secrets
+                  key: postgres-url
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
