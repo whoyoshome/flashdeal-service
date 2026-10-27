@@ -88,6 +88,7 @@ lint-api:
 ## lint-k8s: validate deploy/k8s against the Kubernetes schemas with kubeconform (runs in Docker)
 lint-k8s:
 	docker run --rm -v "$(CURDIR)/deploy/k8s:/k8s:ro" $(KUBECONFORM_IMAGE) -strict -summary /k8s
+	docker run --rm -v "$(CURDIR)/deploy/k8s/smoke:/k8s:ro" $(KUBECONFORM_IMAGE) -strict -summary /k8s
 
 ## load: k6 flash-sale scenario against the running stack (make up + make migrate first)
 load:

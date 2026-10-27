@@ -74,4 +74,6 @@ go tool pprof http://localhost:6060/debug/pprof/profile?seconds=10
 ## Validation
 
 CI checks every manifest against the Kubernetes schemas with
-[kubeconform](https://github.com/yannh/kubeconform).
+[kubeconform](https://github.com/yannh/kubeconform). The `k8s-smoke` job
+also creates a kind cluster, applies `smoke/` + the hardened manifests
+and curls `/readyz` so the Deployment is not decorative.
