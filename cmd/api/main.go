@@ -1,5 +1,9 @@
 // Command api runs the FlashDeal HTTP service. This file is the composition
 // root: it loads configuration, wires dependencies and owns the lifecycle.
+//
+// Subcommands reuse the same binary in images without a shell:
+// `healthcheck` probes the local liveness endpoint, and `migrate` applies
+// the embedded schema migrations.
 package main
 
 import (
@@ -46,8 +50,13 @@ func main() {
 		os.Exit(healthcheck())
 	}
 
+	command := run
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		command = migrateUp
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Environ(), os.Stdout)
+	err := command(ctx, os.Environ(), os.Stdout)
 	stop()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "flashdeal: %v\n", err)

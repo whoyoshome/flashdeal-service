@@ -104,6 +104,30 @@ type Redis struct {
 	WriteTimeout time.Duration `env:"WRITE_TIMEOUT" envDefault:"500ms"`
 }
 
+// Migrate is the configuration of the migrate command. It holds only what
+// reaching PostgreSQL needs, so a migration Job never receives the API's
+// JWT secret or Redis settings.
+type Migrate struct {
+	LogLevel slog.Level `env:"LOG_LEVEL" envDefault:"info"`
+	Postgres Postgres   `envPrefix:"POSTGRES_"`
+}
+
+// LoadMigrate parses and validates the migrate command's configuration from
+// environ, like Load.
+func LoadMigrate(environ []string) (Migrate, error) {
+	cfg, err := env.ParseAsWithOptions[Migrate](env.Options{Environment: env.ToMap(environ)})
+	if err != nil {
+		return Migrate{}, fmt.Errorf("parse environment: %w", err)
+	}
+	if err := errors.Join(
+		positive("POSTGRES_CONNECT_TIMEOUT", cfg.Postgres.ConnectTimeout),
+		positive("POSTGRES_STATEMENT_TIMEOUT", cfg.Postgres.StatementTimeout),
+	); err != nil {
+		return Migrate{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	return cfg, nil
+}
+
 // Load parses configuration from environ (KEY=value pairs, as returned by
 // os.Environ) and validates it. Taking the environment as an argument keeps
 // tests hermetic and confines environment access to cmd/api.
