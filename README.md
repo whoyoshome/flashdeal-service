@@ -266,6 +266,7 @@ while the units are written
 - [JWT authentication: both scenarios measured again](test/load/results/jwt-auth.md)
 - [Multi-replica on kind (2 pods): zero oversell](test/load/results/multi-replica.md)
 - [Stock shards: 1 vs 8 rows, 1 vs 2 replicas](test/load/results/stock-shards.md)
+- [k6 inside the cluster: scenario A on 2 replicas, still pool-bound](test/load/results/k8s-in-cluster.md)
 
 ## Design decisions
 
